@@ -1,0 +1,12 @@
+{
+  "version": "1.0.0",
+  "name": "Image Viewer",
+  "identifier": "image_viewer",
+  "author": "Quackified",
+  "github": "https://github.com/Quackified/image-viewer",
+  "homepage": "https://github.com/Quackified/image-viewer",
+  "description": "An image viewer extension for Lumiverse",
+  "permissions": [],
+  "entry_backend": "dist/backend.js",
+  "entry_frontend": "dist/frontend.js"
+}

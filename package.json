@@ -1,0 +1,24 @@
+{
+  "name": "ts",
+  "module": "index.ts",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:backend": "bun build src/backend.ts --outfile dist/backend.js --target bun",
+    "build:frontend": "bun build src/frontend.ts --outfile dist/frontend.js --target browser",
+    "build": "bun run build:backend && bun run build:frontend"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "lumiverse-spindle-types": "^0.1.7"
+  },
+  "peerDependencies": {
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4"
+  }
+}
