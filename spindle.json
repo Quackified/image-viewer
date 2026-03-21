@@ -6,7 +6,7 @@
   "github": "https://github.com/Quackified/image-viewer",
   "homepage": "https://github.com/Quackified/image-viewer",
   "description": "An image viewer extension for Lumiverse",
-  "permissions": [],
+  "permissions": ["ui_panels"],
   "entry_backend": "dist/backend.js",
   "entry_frontend": "dist/frontend.js"
 }
