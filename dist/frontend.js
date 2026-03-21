@@ -26,9 +26,7 @@ function setup(ctx) {
     }
     
     .image-viewer-content {
-      width: 100%;
-      height: 100%;
-      display: flex;
+      display: inline-flex;
       align-items: center;
       justify-content: center;
       background: var(--lumiverse-fill);
@@ -46,8 +44,9 @@ function setup(ctx) {
     }
     
     .image-viewer-content img {
-      max-width: 100%;
-      max-height: 100%;
+      width: 100%;
+      height: 100%;
+      display: block;
       object-fit: contain;
     }
     
@@ -75,31 +74,42 @@ function setup(ctx) {
       opacity: 1;
     }
     
-    /* Resize handles appear on all corners */
+    /* Resize handle - bottom right corner with grip lines */
     .image-viewer-resize {
       position: absolute;
-      width: 12px;
-      height: 12px;
-      background: var(--lumiverse-accent);
-      border-radius: 2px;
-      opacity: 0;
+      bottom: 0;
+      right: 0;
+      width: 20px;
+      height: 20px;
+      cursor: se-resize;
+      opacity: 0.5;
       transition: opacity 0.2s;
-    }
-    
-    /* Show handles when hovering over the widget */
-    .image-viewer-content:hover .image-viewer-resize {
-      opacity: 0.7;
+      touch-action: none;
+      z-index: 20;
     }
     
     .image-viewer-resize:hover {
-      opacity: 1 !important;
+      opacity: 1;
     }
     
-    /* Position each handle in a corner */
-    .image-viewer-resize-nw { top: 0; left: 0; cursor: nw-resize; }
-    .image-viewer-resize-ne { top: 0; right: 0; cursor: ne-resize; }
-    .image-viewer-resize-sw { bottom: 0; left: 0; cursor: sw-resize; }
-    .image-viewer-resize-se { bottom: 0; right: 0; cursor: se-resize; }
+    /* Resize grip - diagonal lines via gradient */
+    .image-viewer-resize::after {
+      content: '';
+      position: absolute;
+      bottom: 2px;
+      right: 2px;
+      width: 12px;
+      height: 12px;
+      background: repeating-linear-gradient(
+        -45deg,
+        var(--lumiverse-text),
+        var(--lumiverse-text) 1px,
+        transparent 1px,
+        transparent 4px
+      );
+      mask-image: linear-gradient(to top left, #000 50%, transparent 50%);
+      -webkit-mask-image: linear-gradient(to top left, #000 50%, transparent 50%);
+    }
     
     /* Avatar hover indicator - shows the avatar is clickable */
     .image-viewer-avatar-hover {
@@ -118,10 +128,7 @@ function setup(ctx) {
     <div class="image-viewer-content">
       <button class="image-viewer-close" title="Close">×</button>
       <img src="" alt="Image preview" />
-      <div class="image-viewer-resize image-viewer-resize-nw" data-direction="nw"></div>
-      <div class="image-viewer-resize image-viewer-resize-ne" data-direction="ne"></div>
-      <div class="image-viewer-resize image-viewer-resize-sw" data-direction="sw"></div>
-      <div class="image-viewer-resize image-viewer-resize-se" data-direction="se"></div>
+      <div class="image-viewer-resize" data-direction="se"></div>
     </div>
   `;
   const content = widget.root.querySelector(".image-viewer-content");
@@ -141,72 +148,99 @@ function setup(ctx) {
       content.classList.remove("pop-out");
     }, 150);
   });
+  let currentAspectRatio = 1;
+  let currentWidth = 400;
+  let currentHeight = 300;
   const showImage = (imageUrl) => {
-    image.setAttribute("src", imageUrl);
-    widget.setVisible(true);
-    content.classList.remove("pop-out");
-    content.classList.add("pop-in");
+    const tempImg = new Image;
+    tempImg.onload = () => {
+      const naturalWidth = tempImg.naturalWidth;
+      const naturalHeight = tempImg.naturalHeight;
+      currentAspectRatio = naturalWidth / naturalHeight;
+      const maxViewportPercent = 0.8;
+      const maxWidth = window.innerWidth * maxViewportPercent;
+      const maxHeight = window.innerHeight * maxViewportPercent;
+      let width = naturalWidth;
+      let height = naturalHeight;
+      if (width > maxWidth || height > maxHeight) {
+        const ratio = Math.min(maxWidth / width, maxHeight / height);
+        width = width * ratio;
+        height = height * ratio;
+      }
+      image.setAttribute("src", imageUrl);
+      widget.root.style.width = width + "px";
+      widget.root.style.height = height + "px";
+      content.style.width = width + "px";
+      content.style.height = height + "px";
+      currentWidth = width;
+      currentHeight = height;
+      widget.setVisible(true);
+      content.classList.remove("pop-out");
+      content.classList.add("pop-in");
+    };
+    tempImg.src = imageUrl;
   };
   window.testImageViewer = () => {
     showImage("https://picsum.photos/400/300");
   };
   console.log("[Image Viewer] Extension loaded! Test with: window.testImageViewer()");
   let isResizing = false;
-  let resizeDirection = "";
   let startX = 0;
   let startY = 0;
   let startWidth = 0;
   let startHeight = 0;
-  let startPos = { x: 0, y: 0 };
-  const resizeHandles = widget.root.querySelectorAll(".image-viewer-resize");
-  resizeHandles.forEach((handle) => {
-    handle.addEventListener("mousedown", (event) => {
-      const mouseEvent = event;
-      mouseEvent.preventDefault();
-      mouseEvent.stopPropagation();
+  const resizeHandle = widget.root.querySelector(".image-viewer-resize");
+  if (resizeHandle) {
+    const handle = resizeHandle;
+    handle.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
       isResizing = true;
-      resizeDirection = mouseEvent.target.dataset.direction || "";
-      startX = mouseEvent.clientX;
-      startY = mouseEvent.clientY;
+      startX = e.clientX;
+      startY = e.clientY;
       startWidth = widget.root.offsetWidth;
       startHeight = widget.root.offsetHeight;
-      startPos = widget.getPosition();
+      handle.setPointerCapture(e.pointerId);
+      widget.root.style.pointerEvents = "none";
+      handle.style.pointerEvents = "auto";
     });
-  });
-  document.addEventListener("mousemove", (event) => {
-    if (!isResizing)
-      return;
-    const deltaX = event.clientX - startX;
-    const deltaY = event.clientY - startY;
-    let newWidth = startWidth;
-    let newHeight = startHeight;
-    let newX = startPos.x;
-    let newY = startPos.y;
-    if (resizeDirection.includes("e")) {
-      newWidth = Math.max(200, startWidth + deltaX);
-    }
-    if (resizeDirection.includes("w")) {
-      newWidth = Math.max(200, startWidth - deltaX);
-      newX = startPos.x + (startWidth - newWidth);
-    }
-    if (resizeDirection.includes("s")) {
-      newHeight = Math.max(150, startHeight + deltaY);
-    }
-    if (resizeDirection.includes("n")) {
-      newHeight = Math.max(150, startHeight - deltaY);
-      newY = startPos.y + (startHeight - newHeight);
-    }
-    widget.root.style.width = newWidth + "px";
-    widget.root.style.height = newHeight + "px";
-    if (resizeDirection.includes("w") || resizeDirection.includes("n")) {
-      widget.moveTo(newX, newY);
-    }
-  });
-  document.addEventListener("mouseup", () => {
-    isResizing = false;
-  });
+    handle.addEventListener("pointermove", (e) => {
+      if (!isResizing)
+        return;
+      const deltaX = e.clientX - startX;
+      const deltaY = e.clientY - startY;
+      const delta = Math.max(deltaX, deltaY);
+      const pos = widget.getPosition();
+      const maxW = window.innerWidth - pos.x;
+      const maxH = window.innerHeight - pos.y;
+      let newWidth = Math.min(Math.max(200, startWidth + delta), maxW);
+      let newHeight = newWidth / currentAspectRatio;
+      if (newHeight > maxH) {
+        newHeight = maxH;
+        newWidth = newHeight * currentAspectRatio;
+      }
+      currentWidth = newWidth;
+      currentHeight = newHeight;
+      widget.root.style.width = newWidth + "px";
+      widget.root.style.height = newHeight + "px";
+      content.style.width = newWidth + "px";
+      content.style.height = newHeight + "px";
+    });
+    const endResize = () => {
+      if (!isResizing)
+        return;
+      isResizing = false;
+      widget.root.style.pointerEvents = "";
+      handle.style.pointerEvents = "";
+    };
+    handle.addEventListener("pointerup", endResize);
+    handle.addEventListener("lostpointercapture", endResize);
+  }
   document.addEventListener("click", (event) => {
     const target = event.target;
+    if (widget.root.contains(target))
+      return;
     if (target.tagName !== "IMG")
       return;
     const img = target;
@@ -215,7 +249,6 @@ function setup(ctx) {
       event.preventDefault();
       event.stopPropagation();
       showImage(src);
-      console.log("[Image Viewer] Avatar clicked, showing:", src);
     }
   });
   return () => {

@@ -28,9 +28,7 @@ export function setup(ctx: SpindleFrontendContext) {
     }
     
     .image-viewer-content {
-      width: 100%;
-      height: 100%;
-      display: flex;
+      display: inline-flex;
       align-items: center;
       justify-content: center;
       background: var(--lumiverse-fill);
@@ -48,8 +46,9 @@ export function setup(ctx: SpindleFrontendContext) {
     }
     
     .image-viewer-content img {
-      max-width: 100%;
-      max-height: 100%;
+      width: 100%;
+      height: 100%;
+      display: block;
       object-fit: contain;
     }
     
@@ -77,31 +76,42 @@ export function setup(ctx: SpindleFrontendContext) {
       opacity: 1;
     }
     
-    /* Resize handles appear on all corners */
+    /* Resize handle - bottom right corner with grip lines */
     .image-viewer-resize {
       position: absolute;
-      width: 12px;
-      height: 12px;
-      background: var(--lumiverse-accent);
-      border-radius: 2px;
-      opacity: 0;
+      bottom: 0;
+      right: 0;
+      width: 20px;
+      height: 20px;
+      cursor: se-resize;
+      opacity: 0.5;
       transition: opacity 0.2s;
-    }
-    
-    /* Show handles when hovering over the widget */
-    .image-viewer-content:hover .image-viewer-resize {
-      opacity: 0.7;
+      touch-action: none;
+      z-index: 20;
     }
     
     .image-viewer-resize:hover {
-      opacity: 1 !important;
+      opacity: 1;
     }
     
-    /* Position each handle in a corner */
-    .image-viewer-resize-nw { top: 0; left: 0; cursor: nw-resize; }
-    .image-viewer-resize-ne { top: 0; right: 0; cursor: ne-resize; }
-    .image-viewer-resize-sw { bottom: 0; left: 0; cursor: sw-resize; }
-    .image-viewer-resize-se { bottom: 0; right: 0; cursor: se-resize; }
+    /* Resize grip - diagonal lines via gradient */
+    .image-viewer-resize::after {
+      content: '';
+      position: absolute;
+      bottom: 2px;
+      right: 2px;
+      width: 12px;
+      height: 12px;
+      background: repeating-linear-gradient(
+        -45deg,
+        var(--lumiverse-text),
+        var(--lumiverse-text) 1px,
+        transparent 1px,
+        transparent 4px
+      );
+      mask-image: linear-gradient(to top left, #000 50%, transparent 50%);
+      -webkit-mask-image: linear-gradient(to top left, #000 50%, transparent 50%);
+    }
     
     /* Avatar hover indicator - shows the avatar is clickable */
     .image-viewer-avatar-hover {
@@ -124,10 +134,7 @@ export function setup(ctx: SpindleFrontendContext) {
     <div class="image-viewer-content">
       <button class="image-viewer-close" title="Close">×</button>
       <img src="" alt="Image preview" />
-      <div class="image-viewer-resize image-viewer-resize-nw" data-direction="nw"></div>
-      <div class="image-viewer-resize image-viewer-resize-ne" data-direction="ne"></div>
-      <div class="image-viewer-resize image-viewer-resize-sw" data-direction="sw"></div>
-      <div class="image-viewer-resize image-viewer-resize-se" data-direction="se"></div>
+      <div class="image-viewer-resize" data-direction="se"></div>
     </div>
   `
 
@@ -158,14 +165,57 @@ export function setup(ctx: SpindleFrontendContext) {
     }, 150)
   })
 
+  // Track the current image's aspect ratio for proportional resizing
+  let currentAspectRatio = 1
+  // Track current widget dimensions (so we can re-assert after framework drag)
+  let currentWidth = 400
+  let currentHeight = 300
+
   // Function to show an image in the viewer with pop-in animation
   const showImage = (imageUrl: string) => {
-    image.setAttribute('src', imageUrl)
-    widget.setVisible(true)
-    
-    // Trigger pop-in animation
-    content.classList.remove('pop-out')
-    content.classList.add('pop-in')
+    // Load image to get natural dimensions
+    const tempImg = new Image()
+    tempImg.onload = () => {
+      const naturalWidth = tempImg.naturalWidth
+      const naturalHeight = tempImg.naturalHeight
+      currentAspectRatio = naturalWidth / naturalHeight
+      
+      // Calculate size that fits within viewport (max 80% of viewport)
+      const maxViewportPercent = 0.8
+      const maxWidth = window.innerWidth * maxViewportPercent
+      const maxHeight = window.innerHeight * maxViewportPercent
+      
+      let width = naturalWidth
+      let height = naturalHeight
+      
+      // Scale down if image is larger than max viewport size
+      if (width > maxWidth || height > maxHeight) {
+        const ratio = Math.min(maxWidth / width, maxHeight / height)
+        width = width * ratio
+        height = height * ratio
+      }
+      
+      // Set the image source
+      image.setAttribute('src', imageUrl)
+      
+      // Set widget size to match image dimensions
+      widget.root.style.width = width + 'px'
+      widget.root.style.height = height + 'px'
+      content.style.width = width + 'px'
+      content.style.height = height + 'px'
+      
+      // Track dimensions so we can re-assert after framework drag
+      currentWidth = width
+      currentHeight = height
+      
+      // Show the widget
+      widget.setVisible(true)
+      
+      // Trigger pop-in animation
+      content.classList.remove('pop-out')
+      content.classList.add('pop-in')
+    }
+    tempImg.src = imageUrl
   }
 
   // Test function for development
@@ -177,86 +227,91 @@ export function setup(ctx: SpindleFrontendContext) {
 
   // Track resize state
   let isResizing = false
-  let resizeDirection = ''
   let startX = 0
   let startY = 0
   let startWidth = 0
   let startHeight = 0
-  let startPos = { x: 0, y: 0 }
 
-  // Get all resize handles
-  const resizeHandles = widget.root.querySelectorAll('.image-viewer-resize')
+  // Get the resize handle
+  const resizeHandle = widget.root.querySelector('.image-viewer-resize')
 
-  // When a resize handle is pressed
-  resizeHandles.forEach((handle) => {
-    handle.addEventListener('mousedown', (event: Event) => {
-      const mouseEvent = event as MouseEvent
-      mouseEvent.preventDefault()
-      mouseEvent.stopPropagation()
-      
+  if (resizeHandle) {
+    const handle = resizeHandle as HTMLElement
+
+    // Pointer down: start resize, capture pointer, block framework drag
+    handle.addEventListener('pointerdown', (e: PointerEvent) => {
+      e.preventDefault()
+      e.stopPropagation()
+      e.stopImmediatePropagation()
+
       isResizing = true
-      resizeDirection = (mouseEvent.target as HTMLElement).dataset.direction || ''
-      
-      // Remember starting positions
-      startX = mouseEvent.clientX
-      startY = mouseEvent.clientY
+      startX = e.clientX
+      startY = e.clientY
       startWidth = widget.root.offsetWidth
       startHeight = widget.root.offsetHeight
-      startPos = widget.getPosition()
+
+      // Route all future pointer events to this handle
+      handle.setPointerCapture(e.pointerId)
+
+      // Disable pointer-events on widget root so the framework wrapper
+      // never sees the drag and doesn't initiate its built-in move
+      widget.root.style.pointerEvents = 'none'
+      handle.style.pointerEvents = 'auto'
+
+
     })
-  })
 
-  // When mouse moves (while resizing) - attached to document for reliability
-  document.addEventListener('mousemove', (event: MouseEvent) => {
-    if (!isResizing) return
-    
-    // Calculate how much the mouse moved
-    const deltaX = event.clientX - startX
-    const deltaY = event.clientY - startY
-    
-    let newWidth = startWidth
-    let newHeight = startHeight
-    let newX = startPos.x
-    let newY = startPos.y
-    
-    // Calculate new size based on which handle was dragged
-    // East handles (e, ne, se) - resize right edge
-    if (resizeDirection.includes('e')) {
-      newWidth = Math.max(200, startWidth + deltaX)
-    }
-    // West handles (w, nw, sw) - resize left edge, need to move position
-    if (resizeDirection.includes('w')) {
-      newWidth = Math.max(200, startWidth - deltaX)
-      newX = startPos.x + (startWidth - newWidth)
-    }
-    // South handles (s, se, sw) - resize bottom edge
-    if (resizeDirection.includes('s')) {
-      newHeight = Math.max(150, startHeight + deltaY)
-    }
-    // North handles (n, ne, nw) - resize top edge, need to move position
-    if (resizeDirection.includes('n')) {
-      newHeight = Math.max(150, startHeight - deltaY)
-      newY = startPos.y + (startHeight - newHeight)
-    }
-    
-    // Apply new size to the widget root (not just content)
-    widget.root.style.width = newWidth + 'px'
-    widget.root.style.height = newHeight + 'px'
-    
-    // Move widget if resized from left or top
-    if (resizeDirection.includes('w') || resizeDirection.includes('n')) {
-      widget.moveTo(newX, newY)
-    }
-  })
+    // Pointer move: resize the widget maintaining aspect ratio
+    handle.addEventListener('pointermove', (e: PointerEvent) => {
+      if (!isResizing) return
 
-  // When mouse is released - attached to document for reliability
-  document.addEventListener('mouseup', () => {
-    isResizing = false
-  })
+      const deltaX = e.clientX - startX
+      const deltaY = e.clientY - startY
+
+      // Use the larger delta to maintain aspect ratio
+      const delta = Math.max(deltaX, deltaY)
+      
+      // Calculate new size maintaining aspect ratio, clamped to viewport
+      const pos = widget.getPosition()
+      const maxW = window.innerWidth - pos.x
+      const maxH = window.innerHeight - pos.y
+      let newWidth = Math.min(Math.max(200, startWidth + delta), maxW)
+      let newHeight = newWidth / currentAspectRatio
+      // If height-clamped, recalculate width to maintain aspect ratio
+      if (newHeight > maxH) {
+        newHeight = maxH
+        newWidth = newHeight * currentAspectRatio
+      }
+
+      // Track and apply to both widget root and content
+      currentWidth = newWidth
+      currentHeight = newHeight
+
+      widget.root.style.width = newWidth + 'px'
+      widget.root.style.height = newHeight + 'px'
+      content.style.width = newWidth + 'px'
+      content.style.height = newHeight + 'px'
+    })
+
+    // Pointer up / lost capture: stop resizing, restore pointer-events
+    const endResize = () => {
+      if (!isResizing) return
+      isResizing = false
+      widget.root.style.pointerEvents = ''
+      handle.style.pointerEvents = ''
+
+    }
+
+    handle.addEventListener('pointerup', endResize)
+    handle.addEventListener('lostpointercapture', endResize)
+  }
 
   // Avatar click detection using event delegation
   document.addEventListener('click', (event: MouseEvent) => {
     const target = event.target as HTMLElement
+    
+    // Ignore clicks inside our own viewer widget
+    if (widget.root.contains(target)) return
     
     // Check if clicked element is an image
     if (target.tagName !== 'IMG') return
@@ -274,7 +329,7 @@ export function setup(ctx: SpindleFrontendContext) {
       // Show the image in our viewer
       showImage(src)
       
-      console.log('[Image Viewer] Avatar clicked, showing:', src)
+
     }
   })
 
