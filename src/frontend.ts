@@ -3,6 +3,30 @@ import type { SpindleFrontendContext } from 'lumiverse-spindle-types'
 export function setup(ctx: SpindleFrontendContext) {
   // Inject CSS styles for the widget
   const removeStyles = ctx.dom.addStyle(`
+    /* Pop-in animation */
+    @keyframes imageViewerPopIn {
+      from {
+        opacity: 0;
+        transform: scale(0.8);
+      }
+      to {
+        opacity: 1;
+        transform: scale(1);
+      }
+    }
+    
+    /* Pop-out animation */
+    @keyframes imageViewerPopOut {
+      from {
+        opacity: 1;
+        transform: scale(1);
+      }
+      to {
+        opacity: 0;
+        transform: scale(0.8);
+      }
+    }
+    
     .image-viewer-content {
       width: 100%;
       height: 100%;
@@ -13,6 +37,14 @@ export function setup(ctx: SpindleFrontendContext) {
       border-radius: var(--lumiverse-radius);
       overflow: hidden;
       position: relative;
+    }
+    
+    .image-viewer-content.pop-in {
+      animation: imageViewerPopIn 0.2s ease-out forwards;
+    }
+    
+    .image-viewer-content.pop-out {
+      animation: imageViewerPopOut 0.15s ease-in forwards;
     }
     
     .image-viewer-content img {
@@ -114,15 +146,26 @@ export function setup(ctx: SpindleFrontendContext) {
   // Hide widget by default
   widget.setVisible(false)
 
-  // Close button click handler
+  // Close button click handler with pop-out animation
   closeBtn.addEventListener('click', () => {
-    widget.setVisible(false)
+    content.classList.remove('pop-in')
+    content.classList.add('pop-out')
+    
+    // Wait for animation to complete before hiding
+    setTimeout(() => {
+      widget.setVisible(false)
+      content.classList.remove('pop-out')
+    }, 150)
   })
 
-  // Function to show an image in the viewer
+  // Function to show an image in the viewer with pop-in animation
   const showImage = (imageUrl: string) => {
     image.setAttribute('src', imageUrl)
     widget.setVisible(true)
+    
+    // Trigger pop-in animation
+    content.classList.remove('pop-out')
+    content.classList.add('pop-in')
   }
 
   // Test function for development
@@ -139,7 +182,7 @@ export function setup(ctx: SpindleFrontendContext) {
   let startY = 0
   let startWidth = 0
   let startHeight = 0
-  let startLeft = 0
+  let startPos = { x: 0, y: 0 }
 
   // Get all resize handles
   const resizeHandles = widget.root.querySelectorAll('.image-viewer-resize')
@@ -149,6 +192,7 @@ export function setup(ctx: SpindleFrontendContext) {
     handle.addEventListener('mousedown', (event: Event) => {
       const mouseEvent = event as MouseEvent
       mouseEvent.preventDefault()
+      mouseEvent.stopPropagation()
       
       isResizing = true
       resizeDirection = (mouseEvent.target as HTMLElement).dataset.direction || ''
@@ -158,7 +202,7 @@ export function setup(ctx: SpindleFrontendContext) {
       startY = mouseEvent.clientY
       startWidth = widget.root.offsetWidth
       startHeight = widget.root.offsetHeight
-      startLeft = widget.getPosition().x
+      startPos = widget.getPosition()
     })
   })
 
@@ -172,30 +216,36 @@ export function setup(ctx: SpindleFrontendContext) {
     
     let newWidth = startWidth
     let newHeight = startHeight
-    let newX = startLeft
+    let newX = startPos.x
+    let newY = startPos.y
     
     // Calculate new size based on which handle was dragged
+    // East handles (e, ne, se) - resize right edge
     if (resizeDirection.includes('e')) {
       newWidth = Math.max(200, startWidth + deltaX)
     }
+    // West handles (w, nw, sw) - resize left edge, need to move position
     if (resizeDirection.includes('w')) {
       newWidth = Math.max(200, startWidth - deltaX)
-      newX = startLeft + (startWidth - newWidth)
+      newX = startPos.x + (startWidth - newWidth)
     }
+    // South handles (s, se, sw) - resize bottom edge
     if (resizeDirection.includes('s')) {
       newHeight = Math.max(150, startHeight + deltaY)
     }
+    // North handles (n, ne, nw) - resize top edge, need to move position
     if (resizeDirection.includes('n')) {
       newHeight = Math.max(150, startHeight - deltaY)
+      newY = startPos.y + (startHeight - newHeight)
     }
     
-    // Apply new size
-    content.style.width = newWidth + 'px'
-    content.style.height = newHeight + 'px'
+    // Apply new size to the widget root (not just content)
+    widget.root.style.width = newWidth + 'px'
+    widget.root.style.height = newHeight + 'px'
     
-    // Move widget if resized from left side
-    if (resizeDirection.includes('w')) {
-      widget.moveTo(newX, widget.getPosition().y)
+    // Move widget if resized from left or top
+    if (resizeDirection.includes('w') || resizeDirection.includes('n')) {
+      widget.moveTo(newX, newY)
     }
   })
 
@@ -208,23 +258,23 @@ export function setup(ctx: SpindleFrontendContext) {
   document.addEventListener('click', (event: MouseEvent) => {
     const target = event.target as HTMLElement
     
-    // Check if clicked element is an avatar image
-    const avatarImg = target.closest('img[class*="avatar"], img[data-avatar], .avatar img, [class*="Avatar"] img')
+    // Check if clicked element is an image
+    if (target.tagName !== 'IMG') return
     
-    if (avatarImg) {
-      const img = avatarImg as HTMLImageElement
-      const imageUrl = img.getAttribute('src')
+    const img = target as HTMLImageElement
+    const src = img.getAttribute('src')
+    
+    // Check if this is an avatar image (src contains /avatar)
+    // This matches Lumiverse character avatars: /api/v1/characters/{id}/avatar
+    if (src && src.includes('/avatar')) {
+      // Prevent default behavior
+      event.preventDefault()
+      event.stopPropagation()
       
-      if (imageUrl) {
-        // Prevent default behavior
-        event.preventDefault()
-        event.stopPropagation()
-        
-        // Show the image in our viewer
-        showImage(imageUrl)
-        
-        console.log('[Image Viewer] Avatar clicked, showing:', imageUrl)
-      }
+      // Show the image in our viewer
+      showImage(src)
+      
+      console.log('[Image Viewer] Avatar clicked, showing:', src)
     }
   })
 

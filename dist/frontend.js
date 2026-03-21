@@ -1,6 +1,30 @@
 // src/frontend.ts
 function setup(ctx) {
   const removeStyles = ctx.dom.addStyle(`
+    /* Pop-in animation */
+    @keyframes imageViewerPopIn {
+      from {
+        opacity: 0;
+        transform: scale(0.8);
+      }
+      to {
+        opacity: 1;
+        transform: scale(1);
+      }
+    }
+    
+    /* Pop-out animation */
+    @keyframes imageViewerPopOut {
+      from {
+        opacity: 1;
+        transform: scale(1);
+      }
+      to {
+        opacity: 0;
+        transform: scale(0.8);
+      }
+    }
+    
     .image-viewer-content {
       width: 100%;
       height: 100%;
@@ -11,6 +35,14 @@ function setup(ctx) {
       border-radius: var(--lumiverse-radius);
       overflow: hidden;
       position: relative;
+    }
+    
+    .image-viewer-content.pop-in {
+      animation: imageViewerPopIn 0.2s ease-out forwards;
+    }
+    
+    .image-viewer-content.pop-out {
+      animation: imageViewerPopOut 0.15s ease-in forwards;
     }
     
     .image-viewer-content img {
@@ -102,11 +134,18 @@ function setup(ctx) {
   }
   widget.setVisible(false);
   closeBtn.addEventListener("click", () => {
-    widget.setVisible(false);
+    content.classList.remove("pop-in");
+    content.classList.add("pop-out");
+    setTimeout(() => {
+      widget.setVisible(false);
+      content.classList.remove("pop-out");
+    }, 150);
   });
   const showImage = (imageUrl) => {
     image.setAttribute("src", imageUrl);
     widget.setVisible(true);
+    content.classList.remove("pop-out");
+    content.classList.add("pop-in");
   };
   window.testImageViewer = () => {
     showImage("https://picsum.photos/400/300");
@@ -118,19 +157,20 @@ function setup(ctx) {
   let startY = 0;
   let startWidth = 0;
   let startHeight = 0;
-  let startLeft = 0;
+  let startPos = { x: 0, y: 0 };
   const resizeHandles = widget.root.querySelectorAll(".image-viewer-resize");
   resizeHandles.forEach((handle) => {
     handle.addEventListener("mousedown", (event) => {
       const mouseEvent = event;
       mouseEvent.preventDefault();
+      mouseEvent.stopPropagation();
       isResizing = true;
       resizeDirection = mouseEvent.target.dataset.direction || "";
       startX = mouseEvent.clientX;
       startY = mouseEvent.clientY;
       startWidth = widget.root.offsetWidth;
       startHeight = widget.root.offsetHeight;
-      startLeft = widget.getPosition().x;
+      startPos = widget.getPosition();
     });
   });
   document.addEventListener("mousemove", (event) => {
@@ -140,24 +180,26 @@ function setup(ctx) {
     const deltaY = event.clientY - startY;
     let newWidth = startWidth;
     let newHeight = startHeight;
-    let newX = startLeft;
+    let newX = startPos.x;
+    let newY = startPos.y;
     if (resizeDirection.includes("e")) {
       newWidth = Math.max(200, startWidth + deltaX);
     }
     if (resizeDirection.includes("w")) {
       newWidth = Math.max(200, startWidth - deltaX);
-      newX = startLeft + (startWidth - newWidth);
+      newX = startPos.x + (startWidth - newWidth);
     }
     if (resizeDirection.includes("s")) {
       newHeight = Math.max(150, startHeight + deltaY);
     }
     if (resizeDirection.includes("n")) {
       newHeight = Math.max(150, startHeight - deltaY);
+      newY = startPos.y + (startHeight - newHeight);
     }
-    content.style.width = newWidth + "px";
-    content.style.height = newHeight + "px";
-    if (resizeDirection.includes("w")) {
-      widget.moveTo(newX, widget.getPosition().y);
+    widget.root.style.width = newWidth + "px";
+    widget.root.style.height = newHeight + "px";
+    if (resizeDirection.includes("w") || resizeDirection.includes("n")) {
+      widget.moveTo(newX, newY);
     }
   });
   document.addEventListener("mouseup", () => {
@@ -165,16 +207,15 @@ function setup(ctx) {
   });
   document.addEventListener("click", (event) => {
     const target = event.target;
-    const avatarImg = target.closest('img[class*="avatar"], img[data-avatar], .avatar img, [class*="Avatar"] img');
-    if (avatarImg) {
-      const img = avatarImg;
-      const imageUrl = img.getAttribute("src");
-      if (imageUrl) {
-        event.preventDefault();
-        event.stopPropagation();
-        showImage(imageUrl);
-        console.log("[Image Viewer] Avatar clicked, showing:", imageUrl);
-      }
+    if (target.tagName !== "IMG")
+      return;
+    const img = target;
+    const src = img.getAttribute("src");
+    if (src && src.includes("/avatar")) {
+      event.preventDefault();
+      event.stopPropagation();
+      showImage(src);
+      console.log("[Image Viewer] Avatar clicked, showing:", src);
     }
   });
   return () => {
