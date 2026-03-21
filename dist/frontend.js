@@ -180,10 +180,7 @@ function setup(ctx) {
     };
     tempImg.src = imageUrl;
   };
-  window.testImageViewer = () => {
-    showImage("https://picsum.photos/400/300");
-  };
-  console.log("[Image Viewer] Extension loaded! Test with: window.testImageViewer()");
+  console.log("[Image Viewer] Extension loaded");
   let isResizing = false;
   let startX = 0;
   let startY = 0;

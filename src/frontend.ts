@@ -218,12 +218,7 @@ export function setup(ctx: SpindleFrontendContext) {
     tempImg.src = imageUrl
   }
 
-  // Test function for development
-  ;(window as any).testImageViewer = () => {
-    showImage('https://picsum.photos/400/300')
-  }
-  
-  console.log('[Image Viewer] Extension loaded! Test with: window.testImageViewer()')
+  console.log('[Image Viewer] Extension loaded')
 
   // Track resize state
   let isResizing = false
