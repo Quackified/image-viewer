@@ -321,8 +321,15 @@ export function setup(ctx: SpindleFrontendContext) {
       event.preventDefault()
       event.stopPropagation()
       
+      // Strip thumbnail suffixes to get original image
+      // Patterns: _thumb.png, _thumb_lg.png, _thumb_sm.png
+      let originalSrc = src
+        .replace(/_thumb_lg(\.[^.]+)$/, '$1')
+        .replace(/_thumb_sm(\.[^.]+)$/, '$1')
+        .replace(/_thumb(\.[^.]+)$/, '$1')
+      
       // Show the image in our viewer
-      showImage(src)
+      showImage(originalSrc)
       
 
     }

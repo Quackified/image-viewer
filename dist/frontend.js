@@ -245,7 +245,8 @@ function setup(ctx) {
     if (src && (src.includes("/api/v1/images/") || src.includes("/avatar"))) {
       event.preventDefault();
       event.stopPropagation();
-      showImage(src);
+      let originalSrc = src.replace(/_thumb_lg(\.[^.]+)$/, "$1").replace(/_thumb_sm(\.[^.]+)$/, "$1").replace(/_thumb(\.[^.]+)$/, "$1");
+      showImage(originalSrc);
     }
   });
   return () => {
