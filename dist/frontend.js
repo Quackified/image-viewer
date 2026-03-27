@@ -242,7 +242,7 @@ function setup(ctx) {
       return;
     const img = target;
     const src = img.getAttribute("src");
-    if (src && src.includes("/avatar")) {
+    if (src && (src.includes("/api/v1/images/") || src.includes("/avatar"))) {
       event.preventDefault();
       event.stopPropagation();
       showImage(src);

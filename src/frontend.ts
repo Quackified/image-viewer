@@ -314,9 +314,9 @@ export function setup(ctx: SpindleFrontendContext) {
     const img = target as HTMLImageElement
     const src = img.getAttribute('src')
     
-    // Check if this is an avatar image (src contains /avatar)
-    // This matches Lumiverse character avatars: /api/v1/characters/{id}/avatar
-    if (src && src.includes('/avatar')) {
+    // Check if this is an avatar/image from Lumiverse API
+    // Matches: /api/v1/images/{uuid} or /api/v1/characters/{id}/avatar
+    if (src && (src.includes('/api/v1/images/') || src.includes('/avatar'))) {
       // Prevent default behavior
       event.preventDefault()
       event.stopPropagation()
