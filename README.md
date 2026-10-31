@@ -78,8 +78,9 @@ image-viewer/
 ## 📋 Changelog
 
 ### v1.1.0
+- **Strict Fit Aspect Ratio**: Sizing calculations strictly lock viewport to image ratio, eliminating canvas letterboxing on initial load and window resizing
 - **Full Pan & Zoom**: Mouse wheel zoom centered on cursor, click-and-drag panning, double-click toggle
-- **Toolbar & Actions**: Zoom controls, rotation (90°), horizontal flip, copy link, and open original tab
+- **Toolbar & Actions**: Zoom controls, Fit button, rotation (90° with auto-fit), horizontal flip, copy link, and open original tab
 - **Native Fullscreen**: Toggle full-viewport mode via Spindle API and `F` shortcut
 - **Resolution Enhancer**: Automatic resolution of full-res URLs from `/api/v1/images/*` and `/image-gen/` thumbnails
 - **Composer Extras Action**: Registered "View Character Avatar" button in the chat input bar extras popover
