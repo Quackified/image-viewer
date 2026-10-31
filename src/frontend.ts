@@ -183,6 +183,9 @@ export function setup(ctx: SpindleFrontendContext) {
       z-index: 10;
       flex-shrink: 0;
       box-sizing: border-box;
+      height: 39px;
+      min-height: 39px;
+      max-height: 39px;
     }
 
     .iv-toolbar-group {
@@ -402,6 +405,13 @@ export function setup(ctx: SpindleFrontendContext) {
   let resizeStartY = 0
   let resizeStartW = 0
 
+  const TOOLBAR_HEIGHT = 39
+
+  // Safe measurement of toolbar height, even when widget is hidden (display: none)
+  function getToolbarHeight(): number {
+    return (toolbarEl && toolbarEl.offsetHeight > 0) ? toolbarEl.offsetHeight : TOOLBAR_HEIGHT
+  }
+
   // Check if ui_panels permission is currently granted
   async function hasUiPanelsPermission(): Promise<boolean> {
     try {
@@ -527,7 +537,7 @@ export function setup(ctx: SpindleFrontendContext) {
           // Adjust window dimensions to match the rotated aspect ratio
           if (widget && containerEl) {
             const currentW = widget.root.offsetWidth
-            const toolbarH = toolbarEl ? toolbarEl.offsetHeight : 39
+            const toolbarH = getToolbarHeight()
             const currentViewportH = Math.max(80, widget.root.offsetHeight - toolbarH)
             const effectiveAR = getEffectiveAspectRatio()
 
@@ -671,7 +681,7 @@ export function setup(ctx: SpindleFrontendContext) {
         const delta = Math.max(deltaX, deltaY)
 
         const pos = widget.getPosition()
-        const toolbarH = toolbarEl ? toolbarEl.offsetHeight : 39
+        const toolbarH = getToolbarHeight()
         const maxViewportW = window.innerWidth - pos.x - 16
         const maxViewportH = window.innerHeight - pos.y - 16 - toolbarH
 
@@ -756,7 +766,7 @@ export function setup(ctx: SpindleFrontendContext) {
       rotation = 0
       flipH = false
 
-      const toolbarH = toolbarEl ? toolbarEl.offsetHeight : 39
+      const toolbarH = getToolbarHeight()
       const maxW = window.innerWidth * 0.85
       const maxH = window.innerHeight * 0.85
 
@@ -847,7 +857,7 @@ export function setup(ctx: SpindleFrontendContext) {
         rotation = (rotation + 90) % 360
         if (widget && containerEl) {
           const currentW = widget.root.offsetWidth
-          const toolbarH = toolbarEl ? toolbarEl.offsetHeight : 39
+          const toolbarH = getToolbarHeight()
           const currentViewportH = Math.max(80, widget.root.offsetHeight - toolbarH)
           const effectiveAR = getEffectiveAspectRatio()
 
