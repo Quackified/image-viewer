@@ -3,6 +3,7 @@ import {
   resolveFullImageUrl,
   calculateFitDimensions,
   calculateResizeDimensions,
+  calculateAnchorPosition,
 } from '../src/frontend'
 import manifest from '../spindle.json'
 import { existsSync, statSync } from 'node:fs'
@@ -97,6 +98,33 @@ describe('Image Viewer Extension', () => {
       const clampedAR = clamped.viewportWidth / clamped.viewportHeight
       expect(Math.abs(clampedAR - ar)).toBeLessThan(0.01)
       expect(clamped.viewportHeight).toBeLessThanOrEqual(400)
+    })
+  })
+
+  describe('Anchor Presets', () => {
+    it('calculates exact top-left coordinates with zero margin', () => {
+      const pos = calculateAnchorPosition('top-left', 400, 300, 1920, 1080, 0)
+      expect(pos).toEqual({ x: 0, y: 0 })
+    })
+
+    it('calculates top-right coordinates correctly', () => {
+      const pos = calculateAnchorPosition('top-right', 400, 300, 1920, 1080, 0)
+      expect(pos).toEqual({ x: 1520, y: 0 })
+    })
+
+    it('calculates center coordinates correctly', () => {
+      const pos = calculateAnchorPosition('center', 400, 300, 1920, 1080, 0)
+      expect(pos).toEqual({ x: 760, y: 390 })
+    })
+
+    it('calculates bottom-left coordinates correctly', () => {
+      const pos = calculateAnchorPosition('bottom-left', 400, 300, 1920, 1080, 0)
+      expect(pos).toEqual({ x: 0, y: 780 })
+    })
+
+    it('calculates bottom-right coordinates correctly', () => {
+      const pos = calculateAnchorPosition('bottom-right', 400, 300, 1920, 1080, 0)
+      expect(pos).toEqual({ x: 1520, y: 780 })
     })
   })
 })

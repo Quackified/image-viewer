@@ -1,6 +1,6 @@
 # Image Viewer
 
-A modern floating image viewer extension for Lumiverse with pan, zoom, rotation, fullscreen, and avatar/attachment detection.
+A modern floating image viewer extension for Lumiverse with pan, zoom, rotation, anchor presets, position locking, and avatar/attachment detection.
 
 ![Version](https://img.shields.io/badge/version-1.1.0-blue)
 ![Platform](https://img.shields.io/badge/platform-Lumiverse-purple)
@@ -36,32 +36,35 @@ image-viewer/
 |---|---|---|
 | **Open Image** | Click any avatar, attachment, or chat image | — |
 | **Quick Avatar** | Extras menu (`+`) in input bar → *View Character Avatar* | — |
-| **Move / Reposition** | Drag anywhere along the toolbar or window background | — |
+| **Move / Reposition** | Drag anywhere along the toolbar or window background (when unlocked) | — |
 | **Pan** | Click & drag inside the viewport | — |
 | **Zoom In / Out** | Mouse wheel over the image or click `+` / `−` | `+` / `−` |
-| **Fit Aspect Ratio** | Click `⊡`, click `Fit` pill, or double-click | `0` |
+| **Fit Aspect Ratio** | Click `⊡`, click `Fit` pill, or double-click viewport | `0` |
+| **Anchor Presets** | Click `⚓` in toolbar to dock to Top-Left, Top-Right, Center, Bottom-Left, or Bottom-Right | — |
+| **Lock / Unlock** | Click `🔓`/`🔒` toggle button in toolbar or More menu | `L` |
 | **Rotate (Auto-Fit)** | Click `↻` in toolbar (window aspect ratio adapts) | `R` |
 | **Flip Horizontal** | Click `⇄` in toolbar | `H` |
-| **Toggle Fullscreen** | Click `⛶` in toolbar | `F` |
-| **Copy Link** | Click `📋` in toolbar | — |
-| **Open Original** | Click `↗` in toolbar | — |
+| **More Options** | Click `⋮` for Copy Image Link, Open in New Tab, Fit Aspect Ratio, and Lock | — |
 | **Strict Aspect Resize** | Drag corner grip lines (window strictly fits image ratio) | — |
-| **Close** | Click `×` button or press Escape | `Esc` |
+| **Close** | Click `×` button or press Escape (closes menus first, then viewer) | `Esc` |
 
 ## 🔧 Technical Details
 
 ### Architecture & APIs
 
 - **Lumiverse Spindle SDK** (`lumiverse-spindle-types@^0.6.75`):
-  - Uses `ctx.ui.createFloatWidget()` with `chromeless: true`
+  - Uses `ctx.ui.createFloatWidget()` with `chromeless: true` and `snapToEdge: false` for unconstrained screen movement
   - Uses `widget.setSize()` and `widget.moveTo()` to keep host placement in sync
-  - Uses native `widget.setFullscreen()` and `widget.isFullscreen()`
+  - Zero-margin anchor calculations (`calculateAnchorPosition`) allowing flush docking to all screen corners
+  - Intercepting pointer events to lock window position without conflict with Spindle's parent wrapper drag
   - Uses `ctx.ui.registerInputBarAction()` for quick avatar access from the chat composer
   - Uses `ctx.permissions.getGranted()`, `ctx.permissions.request()`, and `ctx.events.on('PERMISSION_CHANGED')` for dynamic permission lifecycle management
 - **Resolution Enhancer**:
   - Automatically resolves full-resolution images from thumbnail URLs (e.g., strips `?size=sm` and `?size=lg` for `/api/v1/images/*` and `/api/v1/image-gen/*`)
-- **Pointer Capture & Resize Engine**:
-  - Uses `handle.setPointerCapture()` and `pointer-events` bypass for smooth corner resizing without conflicting with framework drag
+- **Strict Aspect-Ratio Engine**:
+  - Dynamically computes dimensions matching the exact natural aspect ratio while accounting for the 39px toolbar
+  - Eliminates initial-load letterboxing by factoring toolbar dimensions even when hidden
+  - Pointer capture handle for corner resizing with aspect ratio preservation
 - **Theming**:
   - Uses native Lumiverse CSS variables (`--lumiverse-fill`, `--lumiverse-border`, `--lumiverse-text`, `--lumiverse-radius`, etc.) with frosted glass backdrop blur and checkerboard transparency backing
 
@@ -79,14 +82,17 @@ image-viewer/
 
 ### v1.1.0
 - **Strict Fit Aspect Ratio**: Sizing calculations strictly lock viewport to image ratio, eliminating canvas letterboxing on initial load and window resizing
+- **Full Viewport Movement**: Disabled edge snapping (`snapToEdge: false`) to eliminate screen movement clamping and allow dragging flush to all screen edges
+- **Anchor Presets**: Added one-click anchor presets (`⚓`) to dock the window to Top-Left, Top-Right, Center, Bottom-Left, or Bottom-Right with zero margin
+- **Manual Position Locking**: Added `[🔓]`/`[🔒]` toolbar toggle and `L` shortcut to lock window drag in place
+- **Streamlined Toolbar & More Menu**: Moved secondary actions ("Copy Image Link", "Open in New Tab", "Fit Aspect Ratio", "Lock Position") into a neat dropdown menu (`⋮`)
 - **Full Pan & Zoom**: Mouse wheel zoom centered on cursor, click-and-drag panning, double-click toggle
-- **Toolbar & Actions**: Zoom controls, Fit button, rotation (90° with auto-fit), horizontal flip, copy link, and open original tab
-- **Native Fullscreen**: Toggle full-viewport mode via Spindle API and `F` shortcut
+- **Rotation & Flip**: 90° rotation with auto-fitting window dimensions and horizontal flipping (`H`)
 - **Resolution Enhancer**: Automatic resolution of full-res URLs from `/api/v1/images/*` and `/image-gen/` thumbnails
 - **Composer Extras Action**: Registered "View Character Avatar" button in the chat input bar extras popover
 - **Dynamic Permissions**: Live `PERMISSION_CHANGED` handling and graceful permission requests
-- **Keyboard Shortcuts**: `Esc`, `+`, `-`, `0`, `F`, `R`, `H`
-- **Updated Tech Stack**: Updated to `lumiverse-spindle-types@^0.6.75`, added `src/backend.ts`, removed unused dependencies, added Bun test suite
+- **Keyboard Shortcuts**: `Esc`, `+`, `-`, `0`, `L`, `R`, `H`
+- **Updated Tech Stack**: Updated to `lumiverse-spindle-types@^0.6.75`, added `src/backend.ts`, removed unused dependencies, added Bun test suite (14 automated tests)
 
 ### v1.0.1
 - Pop-in/pop-out animations
