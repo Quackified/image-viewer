@@ -39,7 +39,7 @@ export function calculateFitDimensions(
   maxAvailableWidth: number,
   maxAvailableHeight: number,
   toolbarHeight = 39,
-  minViewportWidth = 260
+  minViewportWidth = 280
 ): { widgetWidth: number; widgetHeight: number; viewportWidth: number; viewportHeight: number } {
   const ar = naturalWidth > 0 && naturalHeight > 0 ? naturalWidth / naturalHeight : 1
   const maxViewportH = Math.max(80, maxAvailableHeight - toolbarHeight)
@@ -83,7 +83,7 @@ export function calculateResizeDimensions(
   maxViewportW: number,
   maxViewportH: number,
   toolbarHeight = 39,
-  minViewportWidth = 240
+  minViewportWidth = 280
 ): { widgetWidth: number; widgetHeight: number; viewportWidth: number; viewportHeight: number } {
   const ar = aspectRatio > 0 ? aspectRatio : 1
   let viewportW = Math.max(minViewportWidth, startViewportW + delta)
@@ -147,6 +147,36 @@ export function calculateAnchorPosition(
   return { x, y }
 }
 
+/**
+ * Calculates host coordinate and root transform offset to compensate for
+ * host container padding (e.g. Lumiverse's 12px clamp) so the window can sit flush against viewport edges.
+ */
+export function calculateEdgeFlushPlacement(
+  targetX: number,
+  targetY: number,
+  widgetWidth: number,
+  widgetHeight: number,
+  viewportWidth: number,
+  viewportHeight: number,
+  hostPadding = 12
+): { hostX: number; hostY: number; offsetX: number; offsetY: number } {
+  const clampedTargetX = Math.max(0, Math.min(targetX, Math.max(0, viewportWidth - widgetWidth)))
+  const clampedTargetY = Math.max(0, Math.min(targetY, Math.max(0, viewportHeight - widgetHeight)))
+
+  const maxHostX = Math.max(hostPadding, viewportWidth - widgetWidth - hostPadding)
+  const maxHostY = Math.max(hostPadding, viewportHeight - widgetHeight - hostPadding)
+
+  const hostX = Math.max(hostPadding, Math.min(clampedTargetX, maxHostX))
+  const hostY = Math.max(hostPadding, Math.min(clampedTargetY, maxHostY))
+
+  return {
+    hostX,
+    hostY,
+    offsetX: clampedTargetX - hostX,
+    offsetY: clampedTargetY - hostY,
+  }
+}
+
 export function setup(ctx: SpindleFrontendContext) {
   // Inject CSS styles matching Lumiverse theme system
   const removeStyles = ctx.dom.addStyle(`
@@ -165,7 +195,7 @@ export function setup(ctx: SpindleFrontendContext) {
     @keyframes ivPopIn {
       from {
         opacity: 0;
-        transform: scale(0.9) translateY(8px);
+        transform: scale(0.92) translateY(8px);
       }
       to {
         opacity: 1;
@@ -181,7 +211,7 @@ export function setup(ctx: SpindleFrontendContext) {
       }
       to {
         opacity: 0;
-        transform: scale(0.9) translateY(8px);
+        transform: scale(0.92) translateY(8px);
       }
     }
 
@@ -195,9 +225,9 @@ export function setup(ctx: SpindleFrontendContext) {
       display: flex;
       flex-direction: column;
       background: var(--lumiverse-fill, #16181d);
-      border: 1px solid var(--lumiverse-border, rgba(255, 255, 255, 0.12));
+      border: none;
       border-radius: var(--lumiverse-radius, 8px);
-      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45), inset 0 0 0 1px var(--lumiverse-border, rgba(255, 255, 255, 0.12));
       overflow: hidden;
       position: relative;
       user-select: none;
@@ -229,10 +259,19 @@ export function setup(ctx: SpindleFrontendContext) {
       min-height: 39px;
       max-height: 39px;
       cursor: grab;
+      touch-action: none;
+    }
+
+    .iv-toolbar.is-dragging {
+      cursor: grabbing;
     }
 
     .iv-container.is-locked .iv-toolbar {
-      cursor: default;
+      cursor: nwse-resize;
+    }
+
+    .iv-container.is-locked .iv-toolbar.is-resizing {
+      cursor: nwse-resize;
     }
 
     .iv-toolbar-group {
@@ -412,6 +451,10 @@ export function setup(ctx: SpindleFrontendContext) {
       cursor: grabbing;
     }
 
+    .iv-viewport.is-image-locked {
+      cursor: default !important;
+    }
+
     .iv-img-wrapper {
       width: 100%;
       height: 100%;
@@ -423,7 +466,6 @@ export function setup(ctx: SpindleFrontendContext) {
       left: 0;
       will-change: transform;
       transform-origin: center center;
-      transition: transform 0.05s ease-out;
       pointer-events: none;
     }
 
@@ -529,7 +571,10 @@ export function setup(ctx: SpindleFrontendContext) {
 
   // Lock and Anchor state
   let isLocked = false
+  let isImageLocked = false
   let currentAnchor: AnchorPosition | null = null
+  let logicalX = 0
+  let logicalY = 0
 
   // Dom element references inside the widget
   let containerEl: HTMLElement | null = null
@@ -549,11 +594,20 @@ export function setup(ctx: SpindleFrontendContext) {
   let panStartX = 0
   let panStartY = 0
 
-  // Resizing tracking
+  // Resizing tracking (corner)
   let isResizing = false
   let resizeStartX = 0
   let resizeStartY = 0
   let resizeStartW = 0
+
+  // Toolbar interaction tracking
+  let isToolbarDragging = false
+  let isToolbarResizing = false
+  let tbStartX = 0
+  let tbStartY = 0
+  let tbStartLogicalX = 0
+  let tbStartLogicalY = 0
+  let tbStartW = 0
 
   const TOOLBAR_HEIGHT = 39
 
@@ -617,7 +671,7 @@ export function setup(ctx: SpindleFrontendContext) {
   function updateLockState() {
     if (lockBtn) {
       lockBtn.textContent = isLocked ? '🔒' : '🔓'
-      lockBtn.title = isLocked ? 'Window Locked (Click to unlock)' : 'Window Unlocked (Click to lock)'
+      lockBtn.title = isLocked ? 'Window Locked (Drag toolbar to resize)' : 'Window Unlocked (Drag toolbar to move)'
       lockBtn.classList.toggle('active', isLocked)
     }
     if (containerEl) {
@@ -629,6 +683,41 @@ export function setup(ctx: SpindleFrontendContext) {
     if (menuLockText) menuLockText.textContent = isLocked ? 'Unlock Position' : 'Lock Position'
   }
 
+  // Toggle image size / panning lock
+  function toggleImageLock(force?: boolean) {
+    isImageLocked = typeof force === 'boolean' ? force : !isImageLocked
+    updateImageLockState()
+  }
+
+  function updateImageLockState() {
+    if (viewportEl) {
+      viewportEl.classList.toggle('is-image-locked', isImageLocked)
+    }
+    const menuImgLockIcon = widget?.root.querySelector('.iv-imglock-status-icon')
+    const menuImgLockText = widget?.root.querySelector('.iv-imglock-status-text')
+    if (menuImgLockIcon) menuImgLockIcon.textContent = isImageLocked ? '🔒' : '🔓'
+    if (menuImgLockText) menuImgLockText.textContent = isImageLocked ? 'Unlock Image Pan/Zoom' : 'Lock Image Pan/Zoom'
+  }
+
+  // Updates widget position and applies negative offset if needed so the window sits flush against edges
+  function updateWidgetPosition(targetX: number, targetY: number) {
+    if (!widget) return
+    const w = widget.root.offsetWidth || 440
+    const h = widget.root.offsetHeight || 340
+    const vw = window.innerWidth
+    const vh = window.innerHeight
+
+    const placement = calculateEdgeFlushPlacement(targetX, targetY, w, h, vw, vh, 12)
+    logicalX = placement.hostX + placement.offsetX
+    logicalY = placement.hostY + placement.offsetY
+
+    widget.moveTo(placement.hostX, placement.hostY)
+
+    widget.root.style.transform = (placement.offsetX !== 0 || placement.offsetY !== 0)
+      ? `translate3d(${placement.offsetX}px, ${placement.offsetY}px, 0)`
+      : ''
+  }
+
   // Move widget to an anchor preset position
   function applyAnchor(anchor: AnchorPosition) {
     if (!widget) return
@@ -636,7 +725,7 @@ export function setup(ctx: SpindleFrontendContext) {
     const w = widget.root.offsetWidth || 440
     const h = widget.root.offsetHeight || 340
     const { x, y } = calculateAnchorPosition(anchor, w, h, window.innerWidth, window.innerHeight, 0)
-    widget.moveTo(x, y)
+    updateWidgetPosition(x, y)
     closeMenus()
   }
 
@@ -674,7 +763,7 @@ export function setup(ctx: SpindleFrontendContext) {
           </div>
           <div class="iv-toolbar-group">
             <button class="iv-btn" data-action="anchor-menu" title="Anchor Presets (↖, ↗, ✛, ↙, ↘)">⚓</button>
-            <button class="iv-btn iv-btn-lock" data-action="toggle-lock" title="Window Unlocked (Click to lock)">🔓</button>
+            <button class="iv-btn iv-btn-lock" data-action="toggle-lock" title="Window Unlocked (Drag toolbar to move)">🔓</button>
             <button class="iv-btn" data-action="more-menu" title="More options">⋮</button>
             <button class="iv-btn iv-btn-close" data-action="close" title="Close (Esc)">×</button>
           </div>
@@ -703,9 +792,9 @@ export function setup(ctx: SpindleFrontendContext) {
             <span>Open in New Tab</span>
           </button>
           <div class="iv-menu-divider"></div>
-          <button class="iv-menu-item" data-action="zoom-fit">
-            <span class="iv-menu-icon">⊡</span>
-            <span>Fit Aspect Ratio</span>
+          <button class="iv-menu-item" data-action="toggle-image-lock">
+            <span class="iv-menu-icon iv-imglock-status-icon">🔓</span>
+            <span class="iv-imglock-status-text">Lock Image Pan/Zoom</span>
           </button>
           <button class="iv-menu-item" data-action="toggle-lock">
             <span class="iv-menu-icon iv-lock-status-icon">🔓</span>
@@ -739,27 +828,94 @@ export function setup(ctx: SpindleFrontendContext) {
     // Start hidden
     widget.setVisible(false)
 
-    // Manual locking: intercept pointerdown when locked to block host drag
-    containerEl?.addEventListener('pointerdown', (e: PointerEvent) => {
-      // Interactive controls (buttons, menus, resize handle) are always allowed
-      const isInteractive = (e.target as HTMLElement).closest('button, input, select, .iv-zoom-pill, .image-viewer-resize, .iv-menu')
+    // Toolbar drag: Moves window when unlocked; Resizes window when locked
+    toolbarEl?.addEventListener('pointerdown', (e: PointerEvent) => {
+      const isInteractive = (e.target as HTMLElement).closest('button, input, select, .iv-zoom-pill, .iv-menu')
       if (isInteractive) return
 
-      if (isLocked) {
-        e.stopPropagation()
-        e.stopImmediatePropagation()
-        containerEl?.setPointerCapture(e.pointerId)
-      } else {
-        // If user manually drags while unlocked, clear preset anchor
-        currentAnchor = null
-      }
-    }, true)
+      // Suppress Spindle's built-in drag
+      e.preventDefault()
+      e.stopPropagation()
 
-    containerEl?.addEventListener('pointerup', (e: PointerEvent) => {
-      if (containerEl?.hasPointerCapture(e.pointerId)) {
-        containerEl.releasePointerCapture(e.pointerId)
+      if (!widget || !toolbarEl) return
+
+      tbStartX = e.clientX
+      tbStartY = e.clientY
+      tbStartLogicalX = logicalX
+      tbStartLogicalY = logicalY
+      tbStartW = widget.root.offsetWidth
+
+      toolbarEl.setPointerCapture(e.pointerId)
+
+      if (isLocked) {
+        isToolbarResizing = true
+        toolbarEl.classList.add('is-resizing')
+      } else {
+        isToolbarDragging = true
+        toolbarEl.classList.add('is-dragging')
       }
-    }, true)
+    })
+
+    toolbarEl?.addEventListener('pointermove', (e: PointerEvent) => {
+      if (!widget) return
+
+      if (isToolbarDragging) {
+        const deltaX = e.clientX - tbStartX
+        const deltaY = e.clientY - tbStartY
+        updateWidgetPosition(tbStartLogicalX + deltaX, tbStartLogicalY + deltaY)
+        currentAnchor = null
+      } else if (isToolbarResizing) {
+        const deltaX = e.clientX - tbStartX
+        const deltaY = e.clientY - tbStartY
+        const delta = Math.abs(deltaX) >= Math.abs(deltaY) ? deltaX : deltaY
+
+        const toolbarH = getToolbarHeight()
+        const effectiveAR = getEffectiveAspectRatio()
+        const maxW = window.innerWidth
+        const maxH = window.innerHeight
+
+        const dims = calculateResizeDimensions(
+          tbStartW,
+          delta,
+          effectiveAR,
+          maxW,
+          maxH - toolbarH,
+          toolbarH,
+          280
+        )
+
+        widget.setSize(dims.widgetWidth, dims.widgetHeight)
+        widget.root.style.width = dims.widgetWidth + 'px'
+        widget.root.style.height = dims.widgetHeight + 'px'
+
+        if (currentAnchor) {
+          applyAnchor(currentAnchor)
+        } else {
+          updateWidgetPosition(tbStartLogicalX, tbStartLogicalY)
+        }
+      }
+    })
+
+    const endToolbarInteraction = (e: PointerEvent) => {
+      if (isToolbarDragging) {
+        isToolbarDragging = false
+        toolbarEl?.classList.remove('is-dragging')
+      }
+      if (isToolbarResizing) {
+        isToolbarResizing = false
+        toolbarEl?.classList.remove('is-resizing')
+      }
+      if (toolbarEl && toolbarEl.hasPointerCapture(e.pointerId)) {
+        try {
+          toolbarEl.releasePointerCapture(e.pointerId)
+        } catch {
+          // ignore
+        }
+      }
+    }
+
+    toolbarEl?.addEventListener('pointerup', endToolbarInteraction)
+    toolbarEl?.addEventListener('lostpointercapture', endToolbarInteraction)
 
     // Close menus on outside click
     document.addEventListener('pointerdown', (e: PointerEvent) => {
@@ -776,15 +932,21 @@ export function setup(ctx: SpindleFrontendContext) {
 
       switch (action) {
         case 'zoom-in':
-          scale = Math.min(10, Math.round(scale * 1.25 * 100) / 100)
-          updateTransform()
+          if (!isImageLocked) {
+            scale = Math.min(10, Math.round(scale * 1.25 * 100) / 100)
+            updateTransform()
+          }
           break
         case 'zoom-out':
-          scale = Math.max(0.2, Math.round((scale / 1.25) * 100) / 100)
-          updateTransform()
+          if (!isImageLocked) {
+            scale = Math.max(0.2, Math.round((scale / 1.25) * 100) / 100)
+            updateTransform()
+          }
           break
         case 'zoom-fit':
-          resetTransform()
+          if (!isImageLocked) {
+            resetTransform()
+          }
           closeMenus()
           break
         case 'rotate': {
@@ -801,7 +963,7 @@ export function setup(ctx: SpindleFrontendContext) {
               window.innerWidth * 0.85,
               window.innerHeight * 0.85,
               toolbarH,
-              260
+              280
             )
 
             widget.setSize(dims.widgetWidth, dims.widgetHeight)
@@ -852,6 +1014,10 @@ export function setup(ctx: SpindleFrontendContext) {
           toggleLock()
           closeMenus()
           break
+        case 'toggle-image-lock':
+          toggleImageLock()
+          closeMenus()
+          break
         case 'copy-url':
           if (currentImageUrl) {
             navigator.clipboard.writeText(currentImageUrl).then(() => {
@@ -876,6 +1042,7 @@ export function setup(ctx: SpindleFrontendContext) {
 
     // Viewport mouse wheel zoom (centered on pointer)
     viewportEl?.addEventListener('wheel', (e: WheelEvent) => {
+      if (isImageLocked) return
       e.preventDefault()
       if (!viewportEl) return
 
@@ -896,9 +1063,10 @@ export function setup(ctx: SpindleFrontendContext) {
 
     // Viewport drag-to-pan
     viewportEl?.addEventListener('pointerdown', (e: PointerEvent) => {
-      if (e.button !== 0) return
+      if (e.button !== 0 || isImageLocked) return
       if (!viewportEl) return
 
+      e.preventDefault()
       isPanning = true
       panStartX = e.clientX - panX
       panStartY = e.clientY - panY
@@ -907,16 +1075,23 @@ export function setup(ctx: SpindleFrontendContext) {
     })
 
     viewportEl?.addEventListener('pointermove', (e: PointerEvent) => {
-      if (!isPanning) return
+      if (!isPanning || isImageLocked) return
       panX = e.clientX - panStartX
       panY = e.clientY - panStartY
       updateTransform()
     })
 
-    const endPan = () => {
+    const endPan = (e: PointerEvent) => {
       if (!isPanning) return
       isPanning = false
       viewportEl?.classList.remove('panning')
+      if (viewportEl && viewportEl.hasPointerCapture(e.pointerId)) {
+        try {
+          viewportEl.releasePointerCapture(e.pointerId)
+        } catch {
+          // ignore
+        }
+      }
     }
 
     viewportEl?.addEventListener('pointerup', endPan)
@@ -924,6 +1099,7 @@ export function setup(ctx: SpindleFrontendContext) {
 
     // Double click to toggle Fit Aspect Ratio vs 200% zoom
     viewportEl?.addEventListener('dblclick', (e: MouseEvent) => {
+      if (isImageLocked) return
       if (scale === 1 && panX === 0 && panY === 0) {
         scale = 2
         if (viewportEl) {
@@ -966,10 +1142,9 @@ export function setup(ctx: SpindleFrontendContext) {
         const deltaY = e.clientY - resizeStartY
         const delta = Math.max(deltaX, deltaY)
 
-        const pos = widget.getPosition()
         const toolbarH = getToolbarHeight()
-        const maxViewportW = window.innerWidth - pos.x
-        const maxViewportH = window.innerHeight - pos.y - toolbarH
+        const maxViewportW = window.innerWidth - logicalX
+        const maxViewportH = window.innerHeight - logicalY - toolbarH
 
         const effectiveAR = getEffectiveAspectRatio()
 
@@ -980,19 +1155,32 @@ export function setup(ctx: SpindleFrontendContext) {
           maxViewportW,
           maxViewportH,
           toolbarH,
-          240
+          280
         )
 
         widget.setSize(dims.widgetWidth, dims.widgetHeight)
         widget.root.style.width = dims.widgetWidth + 'px'
         widget.root.style.height = dims.widgetHeight + 'px'
+
+        if (currentAnchor) {
+          applyAnchor(currentAnchor)
+        } else {
+          updateWidgetPosition(logicalX, logicalY)
+        }
       })
 
-      const endResize = () => {
+      const endResize = (e: PointerEvent) => {
         if (!isResizing || !widget) return
         isResizing = false
         widget.root.style.pointerEvents = ''
         resizeHandle.style.pointerEvents = ''
+        if (resizeHandle.hasPointerCapture(e.pointerId)) {
+          try {
+            resizeHandle.releasePointerCapture(e.pointerId)
+          } catch {
+            // ignore
+          }
+        }
       }
 
       resizeHandle.addEventListener('pointerup', endResize)
@@ -1064,7 +1252,7 @@ export function setup(ctx: SpindleFrontendContext) {
         maxW,
         maxH,
         toolbarH,
-        260
+        280
       )
 
       widget!.setSize(dims.widgetWidth, dims.widgetHeight)
@@ -1077,7 +1265,7 @@ export function setup(ctx: SpindleFrontendContext) {
       } else {
         const posX = Math.max(0, Math.round((window.innerWidth - dims.widgetWidth) / 2))
         const posY = Math.max(0, Math.round((window.innerHeight - dims.widgetHeight) / 2))
-        widget!.moveTo(posX, posY)
+        updateWidgetPosition(posX, posY)
       }
 
       // Set image source and reset transforms to fit aspect ratio
@@ -1089,6 +1277,7 @@ export function setup(ctx: SpindleFrontendContext) {
 
       resetTransform()
       updateLockState()
+      updateImageLockState()
 
       // Show widget with pop-in
       widget!.setVisible(true)
@@ -1126,19 +1315,25 @@ export function setup(ctx: SpindleFrontendContext) {
         break
       case '+':
       case '=':
-        e.preventDefault()
-        scale = Math.min(10, Math.round(scale * 1.25 * 100) / 100)
-        updateTransform()
+        if (!isImageLocked) {
+          e.preventDefault()
+          scale = Math.min(10, Math.round(scale * 1.25 * 100) / 100)
+          updateTransform()
+        }
         break
       case '-':
       case '_':
-        e.preventDefault()
-        scale = Math.max(0.2, Math.round((scale / 1.25) * 100) / 100)
-        updateTransform()
+        if (!isImageLocked) {
+          e.preventDefault()
+          scale = Math.max(0.2, Math.round((scale / 1.25) * 100) / 100)
+          updateTransform()
+        }
         break
       case '0':
-        e.preventDefault()
-        resetTransform()
+        if (!isImageLocked) {
+          e.preventDefault()
+          resetTransform()
+        }
         break
       case 'r':
       case 'R': {
@@ -1155,7 +1350,7 @@ export function setup(ctx: SpindleFrontendContext) {
             window.innerWidth * 0.85,
             window.innerHeight * 0.85,
             toolbarH,
-            260
+            280
           )
 
           widget.setSize(dims.widgetWidth, dims.widgetHeight)
@@ -1217,6 +1412,17 @@ export function setup(ctx: SpindleFrontendContext) {
 
   document.addEventListener('click', clickHandler, true)
 
+  // Window resize handler: keeps anchored windows docked
+  const handleWindowResize = () => {
+    if (!widget || !widget.isVisible()) return
+    if (currentAnchor) {
+      applyAnchor(currentAnchor)
+    } else {
+      updateWidgetPosition(logicalX, logicalY)
+    }
+  }
+  window.addEventListener('resize', handleWindowResize)
+
   // Register chat input bar action in the Extras popover
   try {
     inputAction = ctx.ui.registerInputBarAction({
@@ -1263,6 +1469,7 @@ export function setup(ctx: SpindleFrontendContext) {
     reset: resetTransform,
     setAnchor: applyAnchor,
     toggleLock,
+    toggleImageLock,
     resolveUrl: resolveFullImageUrl,
   }
 
@@ -1271,12 +1478,13 @@ export function setup(ctx: SpindleFrontendContext) {
     showImage(url || 'https://picsum.photos/800/600')
   }
 
-  console.log('[Image Viewer] Extension loaded with anchor presets and manual locking')
+  console.log('[Image Viewer] Extension loaded with anchor presets, flush placement, and toolbar resize')
 
   // Cleanup function
   return () => {
     document.removeEventListener('keydown', keyHandler)
     document.removeEventListener('click', clickHandler, true)
+    window.removeEventListener('resize', handleWindowResize)
     unsubPerm?.()
     inputAction?.destroy()
     widget?.destroy()
