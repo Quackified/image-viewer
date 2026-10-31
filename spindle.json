@@ -1,11 +1,11 @@
 {
-  "version": "1.1.0",
+  "version": "1.1.1",
   "name": "Image Viewer",
   "identifier": "image_viewer",
   "author": "Quackified",
   "github": "https://github.com/Quackified/image-viewer",
   "homepage": "https://github.com/Quackified/image-viewer",
-  "description": "Floating image viewer with pan, zoom, rotation, fullscreen, and avatar/attachment detection for Lumiverse",
+  "description": "Floating image viewer with pan, zoom, rotation, anchor presets, position locking, and avatar/attachment detection for Lumiverse",
   "permissions": ["ui_panels"],
   "entry_backend": "dist/backend.js",
   "entry_frontend": "dist/frontend.js",

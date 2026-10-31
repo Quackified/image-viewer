@@ -4,6 +4,7 @@ import {
   calculateFitDimensions,
   calculateResizeDimensions,
   calculateAnchorPosition,
+  calculateEdgeFlushPlacement,
 } from '../src/frontend'
 import manifest from '../spindle.json'
 import { existsSync, statSync } from 'node:fs'
@@ -125,6 +126,36 @@ describe('Image Viewer Extension', () => {
     it('calculates bottom-right coordinates correctly', () => {
       const pos = calculateAnchorPosition('bottom-right', 400, 300, 1920, 1080, 0)
       expect(pos).toEqual({ x: 1520, y: 780 })
+    })
+  })
+
+  describe('Edge Flush Placement', () => {
+    it('compensates for host padding at top-left origin', () => {
+      const placement = calculateEdgeFlushPlacement(0, 0, 400, 300, 1920, 1080, 12)
+      expect(placement.hostX).toBe(12)
+      expect(placement.hostY).toBe(12)
+      expect(placement.offsetX).toBe(-12)
+      expect(placement.offsetY).toBe(-12)
+      expect(placement.hostX + placement.offsetX).toBe(0)
+      expect(placement.hostY + placement.offsetY).toBe(0)
+    })
+
+    it('compensates for host padding at top-right edge', () => {
+      const placement = calculateEdgeFlushPlacement(1520, 0, 400, 300, 1920, 1080, 12)
+      expect(placement.hostX).toBe(1508)
+      expect(placement.hostY).toBe(12)
+      expect(placement.offsetX).toBe(12)
+      expect(placement.offsetY).toBe(-12)
+      expect(placement.hostX + placement.offsetX).toBe(1520)
+      expect(placement.hostY + placement.offsetY).toBe(0)
+    })
+
+    it('leaves unconstrained center positions un-offset', () => {
+      const placement = calculateEdgeFlushPlacement(760, 390, 400, 300, 1920, 1080, 12)
+      expect(placement.hostX).toBe(760)
+      expect(placement.hostY).toBe(390)
+      expect(placement.offsetX).toBe(0)
+      expect(placement.offsetY).toBe(0)
     })
   })
 })
