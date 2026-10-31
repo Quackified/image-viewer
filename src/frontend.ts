@@ -4,6 +4,8 @@ import type {
   SpindleInputBarActionHandle,
 } from 'lumiverse-spindle-types'
 
+export type AnchorPosition = 'top-left' | 'top-right' | 'center' | 'bottom-left' | 'bottom-right'
+
 /**
  * Resolves full resolution URLs from Lumiverse thumbnail URLs
  * (e.g., strips `?size=sm` or `&size=lg`).
@@ -105,6 +107,46 @@ export function calculateResizeDimensions(
   }
 }
 
+/**
+ * Calculates exact screen coordinates for preset anchor locations with zero edge clamping.
+ */
+export function calculateAnchorPosition(
+  anchor: AnchorPosition,
+  widgetWidth: number,
+  widgetHeight: number,
+  windowWidth: number,
+  windowHeight: number,
+  margin = 0
+): { x: number; y: number } {
+  let x = margin
+  let y = margin
+
+  switch (anchor) {
+    case 'top-left':
+      x = margin
+      y = margin
+      break
+    case 'top-right':
+      x = Math.max(0, windowWidth - widgetWidth - margin)
+      y = margin
+      break
+    case 'center':
+      x = Math.max(0, Math.round((windowWidth - widgetWidth) / 2))
+      y = Math.max(0, Math.round((windowHeight - widgetHeight) / 2))
+      break
+    case 'bottom-left':
+      x = margin
+      y = Math.max(0, windowHeight - widgetHeight - margin)
+      break
+    case 'bottom-right':
+      x = Math.max(0, windowWidth - widgetWidth - margin)
+      y = Math.max(0, windowHeight - widgetHeight - margin)
+      break
+  }
+
+  return { x, y }
+}
+
 export function setup(ctx: SpindleFrontendContext) {
   // Inject CSS styles matching Lumiverse theme system
   const removeStyles = ctx.dom.addStyle(`
@@ -186,6 +228,11 @@ export function setup(ctx: SpindleFrontendContext) {
       height: 39px;
       min-height: 39px;
       max-height: 39px;
+      cursor: grab;
+    }
+
+    .iv-container.is-locked .iv-toolbar {
+      cursor: default;
     }
 
     .iv-toolbar-group {
@@ -220,6 +267,12 @@ export function setup(ctx: SpindleFrontendContext) {
       transform: scale(0.94);
     }
 
+    .iv-btn.active {
+      color: var(--lumiverse-accent, #38bdf8);
+      background: rgba(56, 189, 248, 0.15);
+      opacity: 1;
+    }
+
     .iv-btn-close {
       color: var(--lumiverse-text, #e2e8f0);
       font-size: 16px;
@@ -245,6 +298,96 @@ export function setup(ctx: SpindleFrontendContext) {
     .iv-zoom-pill:hover {
       color: var(--lumiverse-text, #fff);
       background: var(--lumiverse-border, rgba(255, 255, 255, 0.08));
+    }
+
+    /* Dropdown Menus */
+    .iv-menu {
+      position: absolute;
+      top: 42px;
+      right: 6px;
+      min-width: 175px;
+      background: var(--lumiverse-fill, #16181d);
+      border: 1px solid var(--lumiverse-border, rgba(255, 255, 255, 0.15));
+      border-radius: var(--lumiverse-radius, 8px);
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+      backdrop-filter: blur(20px);
+      z-index: 50;
+      padding: 6px;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      box-sizing: border-box;
+      animation: ivPopIn 0.12s ease-out forwards;
+    }
+
+    .iv-menu-header {
+      font-size: 10px;
+      font-weight: 600;
+      color: var(--lumiverse-text-muted, #94a3b8);
+      padding: 4px 6px 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .iv-menu-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 4px;
+    }
+
+    .iv-menu-grid button:last-child:nth-child(odd) {
+      grid-column: span 2;
+    }
+
+    .iv-menu-btn {
+      padding: 6px 8px;
+      border: 1px solid var(--lumiverse-border, rgba(255, 255, 255, 0.08));
+      background: var(--lumiverse-fill-subtle, rgba(255, 255, 255, 0.04));
+      color: var(--lumiverse-text, #e2e8f0);
+      border-radius: calc(var(--lumiverse-radius, 6px) - 2px);
+      font-size: 11px;
+      cursor: pointer;
+      text-align: left;
+      transition: background 0.15s, color 0.15s;
+    }
+
+    .iv-menu-btn:hover {
+      background: var(--lumiverse-border, rgba(255, 255, 255, 0.15));
+      color: #fff;
+    }
+
+    .iv-menu-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 8px;
+      border: none;
+      background: transparent;
+      color: var(--lumiverse-text, #e2e8f0);
+      border-radius: calc(var(--lumiverse-radius, 6px) - 2px);
+      font-size: 12px;
+      cursor: pointer;
+      text-align: left;
+      width: 100%;
+      box-sizing: border-box;
+      transition: background 0.15s, color 0.15s;
+    }
+
+    .iv-menu-item:hover {
+      background: var(--lumiverse-border, rgba(255, 255, 255, 0.15));
+      color: #fff;
+    }
+
+    .iv-menu-icon {
+      font-size: 13px;
+      width: 16px;
+      text-align: center;
+    }
+
+    .iv-menu-divider {
+      height: 1px;
+      background: var(--lumiverse-border, rgba(255, 255, 255, 0.08));
+      margin: 4px 0;
     }
 
     /* Main Viewport Area */
@@ -384,6 +527,10 @@ export function setup(ctx: SpindleFrontendContext) {
   let rotation = 0
   let flipH = false
 
+  // Lock and Anchor state
+  let isLocked = false
+  let currentAnchor: AnchorPosition | null = null
+
   // Dom element references inside the widget
   let containerEl: HTMLElement | null = null
   let toolbarEl: HTMLElement | null = null
@@ -393,6 +540,9 @@ export function setup(ctx: SpindleFrontendContext) {
   let spinnerEl: HTMLElement | null = null
   let errorEl: HTMLElement | null = null
   let zoomPill: HTMLElement | null = null
+  let lockBtn: HTMLElement | null = null
+  let anchorMenuEl: HTMLElement | null = null
+  let moreMenuEl: HTMLElement | null = null
 
   // Panning tracking
   let isPanning = false
@@ -452,6 +602,44 @@ export function setup(ctx: SpindleFrontendContext) {
     updateTransform()
   }
 
+  // Close all open dropdown menus
+  function closeMenus() {
+    if (anchorMenuEl) anchorMenuEl.style.display = 'none'
+    if (moreMenuEl) moreMenuEl.style.display = 'none'
+  }
+
+  // Toggle manual position lock
+  function toggleLock(force?: boolean) {
+    isLocked = typeof force === 'boolean' ? force : !isLocked
+    updateLockState()
+  }
+
+  function updateLockState() {
+    if (lockBtn) {
+      lockBtn.textContent = isLocked ? '🔒' : '🔓'
+      lockBtn.title = isLocked ? 'Window Locked (Click to unlock)' : 'Window Unlocked (Click to lock)'
+      lockBtn.classList.toggle('active', isLocked)
+    }
+    if (containerEl) {
+      containerEl.classList.toggle('is-locked', isLocked)
+    }
+    const menuLockIcon = widget?.root.querySelector('.iv-lock-status-icon')
+    const menuLockText = widget?.root.querySelector('.iv-lock-status-text')
+    if (menuLockIcon) menuLockIcon.textContent = isLocked ? '🔒' : '🔓'
+    if (menuLockText) menuLockText.textContent = isLocked ? 'Unlock Position' : 'Lock Position'
+  }
+
+  // Move widget to an anchor preset position
+  function applyAnchor(anchor: AnchorPosition) {
+    if (!widget) return
+    currentAnchor = anchor
+    const w = widget.root.offsetWidth || 440
+    const h = widget.root.offsetHeight || 340
+    const { x, y } = calculateAnchorPosition(anchor, w, h, window.innerWidth, window.innerHeight, 0)
+    widget.moveTo(x, y)
+    closeMenus()
+  }
+
   // Initialize the floating widget
   function initWidget(): boolean {
     if (widget) return true
@@ -461,10 +649,10 @@ export function setup(ctx: SpindleFrontendContext) {
         width: 440,
         height: 340,
         initialPosition: {
-          x: Math.max(20, Math.round((window.innerWidth - 440) / 2)),
-          y: Math.max(20, Math.round((window.innerHeight - 340) / 2)),
+          x: Math.max(0, Math.round((window.innerWidth - 440) / 2)),
+          y: Math.max(0, Math.round((window.innerHeight - 340) / 2)),
         },
-        snapToEdge: true,
+        snapToEdge: false,
         tooltip: 'Image Viewer',
         chromeless: true,
       })
@@ -485,12 +673,46 @@ export function setup(ctx: SpindleFrontendContext) {
             <button class="iv-btn" data-action="flip" title="Flip Horizontal (H)">⇄</button>
           </div>
           <div class="iv-toolbar-group">
-            <button class="iv-btn" data-action="fullscreen" title="Toggle Fullscreen (F)">⛶</button>
-            <button class="iv-btn" data-action="copy-url" title="Copy Image URL">📋</button>
-            <button class="iv-btn" data-action="open-tab" title="Open in New Tab">↗</button>
+            <button class="iv-btn" data-action="anchor-menu" title="Anchor Presets (↖, ↗, ✛, ↙, ↘)">⚓</button>
+            <button class="iv-btn iv-btn-lock" data-action="toggle-lock" title="Window Unlocked (Click to lock)">🔓</button>
+            <button class="iv-btn" data-action="more-menu" title="More options">⋮</button>
             <button class="iv-btn iv-btn-close" data-action="close" title="Close (Esc)">×</button>
           </div>
         </div>
+
+        <!-- Anchor Presets Dropdown -->
+        <div class="iv-menu iv-anchor-menu" style="display: none;">
+          <div class="iv-menu-header">Anchor Presets</div>
+          <div class="iv-menu-grid">
+            <button class="iv-menu-btn" data-action="anchor-tl" title="Top Left">↖ Top Left</button>
+            <button class="iv-menu-btn" data-action="anchor-tr" title="Top Right">↗ Top Right</button>
+            <button class="iv-menu-btn" data-action="anchor-center" title="Center">✛ Center</button>
+            <button class="iv-menu-btn" data-action="anchor-bl" title="Bottom Left">↙ Bottom Left</button>
+            <button class="iv-menu-btn" data-action="anchor-br" title="Bottom Right">↘ Bottom Right</button>
+          </div>
+        </div>
+
+        <!-- More Options Dropdown -->
+        <div class="iv-menu iv-more-menu" style="display: none;">
+          <button class="iv-menu-item" data-action="copy-url">
+            <span class="iv-menu-icon">📋</span>
+            <span>Copy Image Link</span>
+          </button>
+          <button class="iv-menu-item" data-action="open-tab">
+            <span class="iv-menu-icon">↗</span>
+            <span>Open in New Tab</span>
+          </button>
+          <div class="iv-menu-divider"></div>
+          <button class="iv-menu-item" data-action="zoom-fit">
+            <span class="iv-menu-icon">⊡</span>
+            <span>Fit Aspect Ratio</span>
+          </button>
+          <button class="iv-menu-item" data-action="toggle-lock">
+            <span class="iv-menu-icon iv-lock-status-icon">🔓</span>
+            <span class="iv-lock-status-text">Lock Position</span>
+          </button>
+        </div>
+
         <div class="iv-viewport">
           <div class="iv-spinner"></div>
           <div class="iv-error">Failed to load image</div>
@@ -510,12 +732,44 @@ export function setup(ctx: SpindleFrontendContext) {
     spinnerEl = widget.root.querySelector('.iv-spinner')
     errorEl = widget.root.querySelector('.iv-error')
     zoomPill = widget.root.querySelector('.iv-zoom-pill')
+    lockBtn = widget.root.querySelector('.iv-btn-lock')
+    anchorMenuEl = widget.root.querySelector('.iv-anchor-menu')
+    moreMenuEl = widget.root.querySelector('.iv-more-menu')
 
     // Start hidden
     widget.setVisible(false)
 
-    // Toolbar button clicks
-    toolbarEl?.addEventListener('click', (e) => {
+    // Manual locking: intercept pointerdown when locked to block host drag
+    containerEl?.addEventListener('pointerdown', (e: PointerEvent) => {
+      // Interactive controls (buttons, menus, resize handle) are always allowed
+      const isInteractive = (e.target as HTMLElement).closest('button, input, select, .iv-zoom-pill, .image-viewer-resize, .iv-menu')
+      if (isInteractive) return
+
+      if (isLocked) {
+        e.stopPropagation()
+        e.stopImmediatePropagation()
+        containerEl?.setPointerCapture(e.pointerId)
+      } else {
+        // If user manually drags while unlocked, clear preset anchor
+        currentAnchor = null
+      }
+    }, true)
+
+    containerEl?.addEventListener('pointerup', (e: PointerEvent) => {
+      if (containerEl?.hasPointerCapture(e.pointerId)) {
+        containerEl.releasePointerCapture(e.pointerId)
+      }
+    }, true)
+
+    // Close menus on outside click
+    document.addEventListener('pointerdown', (e: PointerEvent) => {
+      if (containerEl && !containerEl.contains(e.target as Node)) {
+        closeMenus()
+      }
+    })
+
+    // Container click handler for all buttons and menu items
+    containerEl?.addEventListener('click', (e) => {
       const target = (e.target as HTMLElement).closest('[data-action]') as HTMLElement | null
       if (!target) return
       const action = target.getAttribute('data-action')
@@ -531,12 +785,12 @@ export function setup(ctx: SpindleFrontendContext) {
           break
         case 'zoom-fit':
           resetTransform()
+          closeMenus()
           break
         case 'rotate': {
           rotation = (rotation + 90) % 360
           // Adjust window dimensions to match the rotated aspect ratio
           if (widget && containerEl) {
-            const currentW = widget.root.offsetWidth
             const toolbarH = getToolbarHeight()
             const currentViewportH = Math.max(80, widget.root.offsetHeight - toolbarH)
             const effectiveAR = getEffectiveAspectRatio()
@@ -553,6 +807,10 @@ export function setup(ctx: SpindleFrontendContext) {
             widget.setSize(dims.widgetWidth, dims.widgetHeight)
             widget.root.style.width = dims.widgetWidth + 'px'
             widget.root.style.height = dims.widgetHeight + 'px'
+
+            if (currentAnchor) {
+              applyAnchor(currentAnchor)
+            }
           }
           updateTransform()
           break
@@ -561,25 +819,53 @@ export function setup(ctx: SpindleFrontendContext) {
           flipH = !flipH
           updateTransform()
           break
-        case 'fullscreen':
-          if (widget) {
-            const isFs = widget.isFullscreen?.() ?? false
-            widget.setFullscreen?.(!isFs)
+        case 'anchor-menu':
+          if (anchorMenuEl) {
+            const isShown = anchorMenuEl.style.display !== 'none'
+            closeMenus()
+            anchorMenuEl.style.display = isShown ? 'none' : 'flex'
           }
+          break
+        case 'more-menu':
+          if (moreMenuEl) {
+            const isShown = moreMenuEl.style.display !== 'none'
+            closeMenus()
+            moreMenuEl.style.display = isShown ? 'none' : 'flex'
+          }
+          break
+        case 'anchor-tl':
+          applyAnchor('top-left')
+          break
+        case 'anchor-tr':
+          applyAnchor('top-right')
+          break
+        case 'anchor-center':
+          applyAnchor('center')
+          break
+        case 'anchor-bl':
+          applyAnchor('bottom-left')
+          break
+        case 'anchor-br':
+          applyAnchor('bottom-right')
+          break
+        case 'toggle-lock':
+          toggleLock()
+          closeMenus()
           break
         case 'copy-url':
           if (currentImageUrl) {
             navigator.clipboard.writeText(currentImageUrl).then(() => {
-              target.textContent = '✓'
+              target.textContent = '✓ Copied!'
               setTimeout(() => {
-                target.textContent = '📋'
-              }, 1200)
+                closeMenus()
+              }, 800)
             })
           }
           break
         case 'open-tab':
           if (currentImageUrl) {
             window.open(currentImageUrl, '_blank', 'noopener,noreferrer')
+            closeMenus()
           }
           break
         case 'close':
@@ -682,8 +968,8 @@ export function setup(ctx: SpindleFrontendContext) {
 
         const pos = widget.getPosition()
         const toolbarH = getToolbarHeight()
-        const maxViewportW = window.innerWidth - pos.x - 16
-        const maxViewportH = window.innerHeight - pos.y - 16 - toolbarH
+        const maxViewportW = window.innerWidth - pos.x
+        const maxViewportH = window.innerHeight - pos.y - toolbarH
 
         const effectiveAR = getEffectiveAspectRatio()
 
@@ -719,6 +1005,7 @@ export function setup(ctx: SpindleFrontendContext) {
   // Close the viewer with a pop-out animation
   function closeViewer() {
     if (!widget || !containerEl) return
+    closeMenus()
     containerEl.classList.remove('pop-in')
     containerEl.classList.add('pop-out')
 
@@ -755,6 +1042,7 @@ export function setup(ctx: SpindleFrontendContext) {
     spinnerEl?.classList.add('active')
     errorEl?.classList.remove('active')
     if (imgEl) imgEl.style.opacity = '0'
+    closeMenus()
 
     // Preload to get intrinsic dimensions
     const loader = new Image()
@@ -783,10 +1071,14 @@ export function setup(ctx: SpindleFrontendContext) {
       widget!.root.style.width = dims.widgetWidth + 'px'
       widget!.root.style.height = dims.widgetHeight + 'px'
 
-      // Center widget in viewport
-      const posX = Math.max(16, Math.round((window.innerWidth - dims.widgetWidth) / 2))
-      const posY = Math.max(16, Math.round((window.innerHeight - dims.widgetHeight) / 2))
-      widget!.moveTo(posX, posY)
+      // Position widget based on current anchor or center
+      if (currentAnchor) {
+        applyAnchor(currentAnchor)
+      } else {
+        const posX = Math.max(0, Math.round((window.innerWidth - dims.widgetWidth) / 2))
+        const posY = Math.max(0, Math.round((window.innerHeight - dims.widgetHeight) / 2))
+        widget!.moveTo(posX, posY)
+      }
 
       // Set image source and reset transforms to fit aspect ratio
       if (imgEl) {
@@ -796,6 +1088,7 @@ export function setup(ctx: SpindleFrontendContext) {
       }
 
       resetTransform()
+      updateLockState()
 
       // Show widget with pop-in
       widget!.setVisible(true)
@@ -825,7 +1118,11 @@ export function setup(ctx: SpindleFrontendContext) {
     switch (e.key) {
       case 'Escape':
         e.preventDefault()
-        closeViewer()
+        if (anchorMenuEl?.style.display !== 'none' || moreMenuEl?.style.display !== 'none') {
+          closeMenus()
+        } else {
+          closeViewer()
+        }
         break
       case '+':
       case '=':
@@ -843,20 +1140,11 @@ export function setup(ctx: SpindleFrontendContext) {
         e.preventDefault()
         resetTransform()
         break
-      case 'f':
-      case 'F':
-        e.preventDefault()
-        if (widget) {
-          const isFs = widget.isFullscreen?.() ?? false
-          widget.setFullscreen?.(!isFs)
-        }
-        break
       case 'r':
       case 'R': {
         e.preventDefault()
         rotation = (rotation + 90) % 360
         if (widget && containerEl) {
-          const currentW = widget.root.offsetWidth
           const toolbarH = getToolbarHeight()
           const currentViewportH = Math.max(80, widget.root.offsetHeight - toolbarH)
           const effectiveAR = getEffectiveAspectRatio()
@@ -873,6 +1161,10 @@ export function setup(ctx: SpindleFrontendContext) {
           widget.setSize(dims.widgetWidth, dims.widgetHeight)
           widget.root.style.width = dims.widgetWidth + 'px'
           widget.root.style.height = dims.widgetHeight + 'px'
+
+          if (currentAnchor) {
+            applyAnchor(currentAnchor)
+          }
         }
         updateTransform()
         break
@@ -882,6 +1174,11 @@ export function setup(ctx: SpindleFrontendContext) {
         e.preventDefault()
         flipH = !flipH
         updateTransform()
+        break
+      case 'l':
+      case 'L':
+        e.preventDefault()
+        toggleLock()
         break
     }
   }
@@ -964,6 +1261,8 @@ export function setup(ctx: SpindleFrontendContext) {
     show: showImage,
     close: closeViewer,
     reset: resetTransform,
+    setAnchor: applyAnchor,
+    toggleLock,
     resolveUrl: resolveFullImageUrl,
   }
 
@@ -972,7 +1271,7 @@ export function setup(ctx: SpindleFrontendContext) {
     showImage(url || 'https://picsum.photos/800/600')
   }
 
-  console.log('[Image Viewer] Extension loaded with strict fit aspect ratio mechanics')
+  console.log('[Image Viewer] Extension loaded with anchor presets and manual locking')
 
   // Cleanup function
   return () => {
