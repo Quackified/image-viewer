@@ -5,6 +5,12 @@ import {
   calculateResizeDimensions,
   calculateAnchorPosition,
   calculateEdgeFlushPlacement,
+  snapPosition,
+  detectAnchor,
+  calculateCornerResize,
+  clampDockSize,
+  defaultDockSize,
+  calculateActualSizeScale,
 } from '../src/frontend'
 import manifest from '../spindle.json'
 import { existsSync, statSync } from 'node:fs'
@@ -156,6 +162,81 @@ describe('Image Viewer Extension', () => {
       expect(placement.hostY).toBe(390)
       expect(placement.offsetX).toBe(0)
       expect(placement.offsetY).toBe(0)
+    })
+  })
+
+  describe('snapPosition', () => {
+    it('snaps to screen edges within the threshold', () => {
+      const r = snapPosition(10, 770, 400, 300, 1920, 1080, 16)
+      expect(r.x).toBe(0)
+      expect(r.snapX).toBe('start')
+      expect(r.y).toBe(780)
+      expect(r.snapY).toBe('end')
+    })
+
+    it('snaps to center and leaves distant positions alone', () => {
+      const r = snapPosition(765, 200, 400, 300, 1920, 1080, 16)
+      expect(r.x).toBe(760)
+      expect(r.snapX).toBe('center')
+      expect(r.y).toBe(200)
+      expect(r.snapY).toBeNull()
+    })
+  })
+
+  describe('detectAnchor', () => {
+    it('derives corner and center anchors from geometry', () => {
+      expect(detectAnchor(0, 0, 400, 300, 1920, 1080)).toBe('top-left')
+      expect(detectAnchor(1520, 780, 400, 300, 1920, 1080)).toBe('bottom-right')
+      expect(detectAnchor(760, 390, 400, 300, 1920, 1080)).toBe('center')
+      expect(detectAnchor(300, 300, 400, 300, 1920, 1080)).toBeNull()
+    })
+  })
+
+  describe('calculateCornerResize', () => {
+    const start = { x: 1520, y: 780, viewportWidth: 400, widgetHeight: 339 }
+
+    it('grows a bottom-right docked window from its NW corner while pinning the opposite corner', () => {
+      const r = calculateCornerResize('nw', start, -100, -75, 4 / 3, 1920, 1080, 39, 320)
+      expect(r.viewportWidth).toBe(500)
+      expect(r.x + r.widgetWidth).toBe(1920)
+      expect(r.y + r.widgetHeight).toBe(1119)
+      expect(r.viewportWidth / r.viewportHeight).toBeCloseTo(4 / 3, 1)
+    })
+
+    it('cannot grow past the screen edge from the SE corner', () => {
+      const r = calculateCornerResize('se', start, 300, 300, 4 / 3, 1920, 1080, 39, 320)
+      expect(r.x).toBe(1520)
+      expect(r.x + r.widgetWidth).toBeLessThanOrEqual(1920)
+      expect(r.y + r.widgetHeight).toBeLessThanOrEqual(1119)
+    })
+
+    it('respects the minimum width', () => {
+      const r = calculateCornerResize('se', { x: 0, y: 0, viewportWidth: 600, widgetHeight: 489 }, -900, -900, 4 / 3, 1920, 1080, 39, 320)
+      expect(r.viewportWidth).toBe(320)
+    })
+  })
+
+  describe('dock sizing', () => {
+    it('clamps to minimum and 70% of the docked axis', () => {
+      expect(clampDockSize(10, 'right', 1920, 1080)).toBe(240)
+      expect(clampDockSize(5000, 'right', 1920, 1080)).toBe(1344)
+      expect(clampDockSize(5000, 'top', 1920, 1080)).toBe(756)
+    })
+
+    it('picks sensible defaults per axis', () => {
+      expect(defaultDockSize('left', 1920, 1080)).toBe(520)
+      expect(defaultDockSize('bottom', 1920, 1080)).toBe(410)
+      expect(defaultDockSize('right', 800, 600)).toBe(320)
+    })
+  })
+
+  describe('calculateActualSizeScale', () => {
+    it('returns the zoom at which natural pixels map 1:1', () => {
+      expect(calculateActualSizeScale(2000, 1000, 1000, 500)).toBeCloseTo(2, 5)
+    })
+
+    it('accounts for rotated images', () => {
+      expect(calculateActualSizeScale(2000, 1000, 500, 1000, true)).toBeCloseTo(2, 5)
     })
   })
 })

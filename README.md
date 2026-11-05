@@ -2,7 +2,7 @@
 
 A modern floating image viewer extension for Lumiverse with pan, zoom, rotation, anchor presets, position locking, and avatar/attachment detection.
 
-![Version](https://img.shields.io/badge/version-1.1.1-blue)
+![Version](https://img.shields.io/badge/version-1.2.0-blue)
 ![Platform](https://img.shields.io/badge/platform-Lumiverse-purple)
 
 ## 📦 Installation
@@ -36,19 +36,17 @@ image-viewer/
 |---|---|---|
 | **Open Image** | Click any avatar, attachment, or chat image | — |
 | **Quick Avatar** | Extras menu (`+`) in input bar → *View Character Avatar* | — |
-| **Move / Reposition** | Drag along toolbar when window is unlocked | — |
-| **Resize via Toolbar** | Drag along toolbar when window is locked | — |
-| **Strict Aspect Resize** | Drag corner grip lines in bottom-right | — |
-| **Pan** | Click & drag inside the viewport (when image pan/zoom is unlocked) | — |
-| **Zoom In / Out** | Mouse wheel over image or click `+` / `−` | `+` / `−` |
-| **Fit Aspect Ratio** | Click `⊡`, click `Fit` pill, or double-click viewport | `0` |
-| **Anchor Presets** | Click `⚓` in toolbar to dock flush to Top-Left, Top-Right, Center, Bottom-Left, or Bottom-Right | — |
-| **Lock Position** | Click `🔓`/`🔒` in toolbar or More menu (switches toolbar drag to resize) | `L` |
-| **Lock Pan / Zoom** | Click `⋮` → *Lock Image Pan/Zoom* to freeze zoom level and disable pan | — |
-| **Rotate (Auto-Fit)** | Click `↻` in toolbar (window aspect ratio adapts) | `R` |
-| **Flip Horizontal** | Click `⇄` in toolbar | `H` |
-| **More Options** | Click `⋮` for Copy Image Link, Open in New Tab, Lock Pan/Zoom, and Lock Position | — |
-| **Close** | Click `×` button or press Escape (closes menus first, then viewer) | `Esc` |
+| **Move window** | Drag the toolbar, or drag anywhere on the image while pan/zoom is locked (default) | — |
+| **Snap** | Dragging magnetically snaps to screen edges/center; hold `Shift` to disable | — |
+| **Resize** | Drag any corner; the opposite corner stays pinned and aspect ratio is exact | — |
+| **Resize via toolbar** | Drag the toolbar while position is locked | — |
+| **Pan / Zoom** | Unlock with `🔒`/`✋`, then drag, wheel, or `+` / `−` (locked by default) | `P`, `+`, `−` |
+| **Fit / 100%** | Click the zoom pill (Fit ↔ 1:1 pixels), or double-click viewport | `0`, `1` |
+| **Layout menu** | `⊞` → Float, Dock Left/Right/Top/Bottom, anchor presets, lock position, reset window | `D` toggles dock |
+| **Lock position** | Layout menu (toolbar drag then resizes instead of moving) | `L` |
+| **Rotate / Flip** | `↻` / `⇄` (window reshapes to match, image always fills it) | `R` / `H` |
+| **More** | `⋮` → Copy Image Link, Open in New Tab, Download | — |
+| **Close** | `×` or Escape (closes menus first) | `Esc` |
 
 ## 🔧 Technical Details
 
@@ -81,6 +79,16 @@ image-viewer/
 - `"ui_panels"`: Required by Lumiverse to create floating widgets that overlay the screen. If not yet granted, the extension prompts the user gracefully when opening an image.
 
 ## 📋 Changelog
+
+### v1.2.0
+- **Docked mode (layout-aware)**: Dock Left/Right/Top/Bottom via the host's dock panel API, so the chat reflows and is never overlaid. Splitter-resizable, size remembered per edge. `D` toggles dock/float
+- **Pan/zoom locked by default**; while locked, dragging the image moves the window, zoom controls dim, and the lock is a visible toolbar button (`P`)
+- **Resize rewrite**: four corner handles with the opposite corner pinned; fixes jitter/no-growth on right/bottom-anchored windows and growth past the screen edge
+- **Snapping**: magnetic edge/center snap while dragging (`Shift` disables); anchors are now derived from where the window actually sits, so they never go stale
+- **Rotation fix**: rotated images now fill the window instead of letterboxing; rotating swaps the window dimensions without size drift
+- **Window resize**: shrinking the browser re-fits an oversized viewer
+- **QoL**: Fit ↔ 1:1 pixel zoom on the pill, Download, Reset Window, remembered mode/dock size/anchor/position lock, reduced-motion support
+- **Fixes**: `Ctrl/Cmd/Alt` shortcuts (e.g. Ctrl+R) no longer hijacked; Copy Link label restores; leaked document listener removed; close/reopen race; stale image load can't clobber a newer one; pointer-cancel handled
 
 ### v1.1.1
 - **Edge Flush Docking**: Added negative offset compensation against host 12px clamp padding so anchor presets and dragging dock flush to screen edges with zero margin

@@ -2,6 +2,7 @@ import type {
   SpindleFrontendContext,
   SpindleFloatWidgetHandle,
   SpindleInputBarActionHandle,
+  SpindleDockPanelHandle,
 } from 'lumiverse-spindle-types'
 
 export type AnchorPosition = 'top-left' | 'top-right' | 'center' | 'bottom-left' | 'bottom-right'
@@ -177,9 +178,154 @@ export function calculateEdgeFlushPlacement(
   }
 }
 
-export function setup(ctx: SpindleFrontendContext) {
-  // Inject CSS styles matching Lumiverse theme system
-  const removeStyles = ctx.dom.addStyle(`
+
+export type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se'
+export type DockEdge = 'left' | 'right' | 'top' | 'bottom'
+export type LayoutMode = 'float' | 'dock-left' | 'dock-right' | 'dock-top' | 'dock-bottom'
+
+export const MIN_VIEWPORT_WIDTH = 320
+export const DOCK_MIN_SIZE = 240
+
+/**
+ * Magnetic edge/center snapping for a dragged window. Returns the snapped position and
+ * which axis (if any) latched, so callers can show feedback and derive anchors.
+ */
+export function snapPosition(
+  x: number,
+  y: number,
+  widgetWidth: number,
+  widgetHeight: number,
+  windowWidth: number,
+  windowHeight: number,
+  threshold = 16
+): { x: number; y: number; snapX: 'start' | 'center' | 'end' | null; snapY: 'start' | 'center' | 'end' | null } {
+  const axis = (pos: number, size: number, bound: number) => {
+    const max = Math.max(0, bound - size)
+    const candidates: Array<[number, 'start' | 'center' | 'end']> = [
+      [0, 'start'],
+      [max, 'end'],
+      [Math.round(max / 2), 'center'],
+    ]
+    let best: { value: number; kind: 'start' | 'center' | 'end'; dist: number } | null = null
+    for (const [value, kind] of candidates) {
+      const dist = Math.abs(pos - value)
+      if (dist <= threshold && (!best || dist < best.dist)) best = { value, kind, dist }
+    }
+    return best ? { pos: best.value, kind: best.kind } : { pos, kind: null }
+  }
+  const ax = axis(x, widgetWidth, windowWidth)
+  const ay = axis(y, widgetHeight, windowHeight)
+  return { x: ax.pos, y: ay.pos, snapX: ax.kind, snapY: ay.kind }
+}
+
+/**
+ * Derives which anchor preset (if any) a window currently sits on, so anchors stay
+ * correct state derived from geometry rather than a flag that goes stale after a drag/resize.
+ */
+export function detectAnchor(
+  x: number,
+  y: number,
+  widgetWidth: number,
+  widgetHeight: number,
+  windowWidth: number,
+  windowHeight: number,
+  tolerance = 1
+): AnchorPosition | null {
+  const maxX = Math.max(0, windowWidth - widgetWidth)
+  const maxY = Math.max(0, windowHeight - widgetHeight)
+  const left = Math.abs(x) <= tolerance
+  const right = Math.abs(x - maxX) <= tolerance
+  const top = Math.abs(y) <= tolerance
+  const bottom = Math.abs(y - maxY) <= tolerance
+  const midX = Math.abs(x - Math.round(maxX / 2)) <= tolerance
+  const midY = Math.abs(y - Math.round(maxY / 2)) <= tolerance
+
+  if (left && top) return 'top-left'
+  if (right && top) return 'top-right'
+  if (left && bottom) return 'bottom-left'
+  if (right && bottom) return 'bottom-right'
+  if (midX && midY) return 'center'
+  return null
+}
+
+/**
+ * Corner resize that keeps the opposite corner pinned and the image aspect ratio exact.
+ * Growth is clamped to the room available on the side the window is expanding into, which
+ * is what makes right/bottom-docked windows resizable from their free corners without jitter.
+ */
+export function calculateCornerResize(
+  corner: ResizeCorner,
+  start: { x: number; y: number; viewportWidth: number; widgetHeight: number },
+  dx: number,
+  dy: number,
+  aspectRatio: number,
+  windowWidth: number,
+  windowHeight: number,
+  toolbarHeight = 39,
+  minViewportWidth = MIN_VIEWPORT_WIDTH
+): { x: number; y: number; widgetWidth: number; widgetHeight: number; viewportWidth: number; viewportHeight: number } {
+  const ar = aspectRatio > 0 ? aspectRatio : 1
+  const west = corner.includes('w')
+  const north = corner.includes('n')
+
+  const growX = west ? -dx : dx
+  const growY = (north ? -dy : dy) * ar
+  const delta = Math.max(growX, growY)
+
+  const right = start.x + start.viewportWidth
+  const bottom = start.y + start.widgetHeight
+  const availW = west ? right : windowWidth - start.x
+  const availVH = (north ? bottom : windowHeight - start.y) - toolbarHeight
+
+  const dims = calculateResizeDimensions(
+    start.viewportWidth,
+    delta,
+    ar,
+    Math.max(1, availW),
+    Math.max(1, availVH),
+    toolbarHeight,
+    minViewportWidth
+  )
+
+  return {
+    ...dims,
+    x: west ? right - dims.widgetWidth : start.x,
+    y: north ? bottom - dims.widgetHeight : start.y,
+  }
+}
+
+/** Clamps a dock panel size to sane bounds for its edge (never more than 70% of the axis). */
+export function clampDockSize(size: number, edge: DockEdge, windowWidth: number, windowHeight: number): number {
+  const axis = edge === 'left' || edge === 'right' ? windowWidth : windowHeight
+  const max = Math.max(DOCK_MIN_SIZE, Math.floor(axis * 0.7))
+  return Math.round(Math.min(max, Math.max(DOCK_MIN_SIZE, size)))
+}
+
+/** Default dock size: roughly a third of the screen along the docked axis. */
+export function defaultDockSize(edge: DockEdge, windowWidth: number, windowHeight: number): number {
+  const horizontal = edge === 'left' || edge === 'right'
+  const raw = horizontal
+    ? Math.min(520, Math.max(320, Math.round(windowWidth * 0.3)))
+    : Math.min(520, Math.max(260, Math.round(windowHeight * 0.38)))
+  return clampDockSize(raw, edge, windowWidth, windowHeight)
+}
+
+/** Scale factor (relative to the "Fit" zoom) at which the image shows at 1:1 natural pixels. */
+export function calculateActualSizeScale(
+  naturalWidth: number,
+  naturalHeight: number,
+  viewportWidth: number,
+  viewportHeight: number,
+  rotated = false
+): number {
+  const w = rotated ? naturalHeight : naturalWidth
+  const h = rotated ? naturalWidth : naturalHeight
+  if (w <= 0 || h <= 0 || viewportWidth <= 0 || viewportHeight <= 0) return 1
+  const fit = Math.min(viewportWidth / w, viewportHeight / h)
+  return fit > 0 ? 1 / fit : 1
+}
+
+const VIEWER_CSS = `
     /* Hover affordance for clickable avatars & chat images */
     img[src*="/avatar"],
     .avatar img,
@@ -191,33 +337,15 @@ export function setup(ctx: SpindleFrontendContext) {
       cursor: zoom-in !important;
     }
 
-    /* Pop-in animation */
     @keyframes ivPopIn {
-      from {
-        opacity: 0;
-        transform: scale(0.92) translateY(8px);
-      }
-      to {
-        opacity: 1;
-        transform: scale(1) translateY(0);
-      }
+      from { opacity: 0; transform: scale(0.92) translateY(8px); }
+      to { opacity: 1; transform: scale(1) translateY(0); }
     }
-
-    /* Pop-out animation */
     @keyframes ivPopOut {
-      from {
-        opacity: 1;
-        transform: scale(1) translateY(0);
-      }
-      to {
-        opacity: 0;
-        transform: scale(0.92) translateY(8px);
-      }
+      from { opacity: 1; transform: scale(1) translateY(0); }
+      to { opacity: 0; transform: scale(0.92) translateY(8px); }
     }
-
-    @keyframes ivSpin {
-      to { transform: rotate(360deg); }
-    }
+    @keyframes ivSpin { to { transform: rotate(360deg); } }
 
     .iv-container {
       width: 100%;
@@ -233,15 +361,29 @@ export function setup(ctx: SpindleFrontendContext) {
       user-select: none;
       backdrop-filter: blur(16px);
       box-sizing: border-box;
+      transition: box-shadow 0.12s;
     }
 
-    .iv-container.pop-in {
-      animation: ivPopIn 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    .iv-container.pop-in { animation: ivPopIn 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+    .iv-container.pop-out { animation: ivPopOut 0.15s cubic-bezier(0.7, 0, 0.84, 0) forwards; }
+
+    /* Magnetic-snap feedback while dragging a floating window */
+    .iv-container.is-snapped {
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45), inset 0 0 0 2px var(--lumiverse-accent, #38bdf8);
     }
 
-    .iv-container.pop-out {
-      animation: ivPopOut 0.15s cubic-bezier(0.7, 0, 0.84, 0) forwards;
+    /* Docked: occupies layout space owned by the host, so no float chrome */
+    .iv-container.is-docked {
+      border-radius: 0;
+      backdrop-filter: none;
+      animation: none;
+      box-shadow: none;
     }
+    .iv-container.dock-right { border-left: 1px solid var(--lumiverse-border, rgba(255, 255, 255, 0.12)); }
+    .iv-container.dock-left { border-right: 1px solid var(--lumiverse-border, rgba(255, 255, 255, 0.12)); }
+    .iv-container.dock-top { border-bottom: 1px solid var(--lumiverse-border, rgba(255, 255, 255, 0.12)); }
+    .iv-container.dock-bottom { border-top: 1px solid var(--lumiverse-border, rgba(255, 255, 255, 0.12)); }
+    .iv-container.is-docked .iv-float-only { display: none !important; }
 
     /* Top Controls Toolbar */
     .iv-toolbar {
@@ -261,24 +403,11 @@ export function setup(ctx: SpindleFrontendContext) {
       cursor: grab;
       touch-action: none;
     }
+    .iv-container.is-moving .iv-toolbar { cursor: grabbing; }
+    .iv-container.is-locked .iv-toolbar { cursor: nwse-resize; }
+    .iv-container.is-docked .iv-toolbar { cursor: default; }
 
-    .iv-toolbar.is-dragging {
-      cursor: grabbing;
-    }
-
-    .iv-container.is-locked .iv-toolbar {
-      cursor: nwse-resize;
-    }
-
-    .iv-container.is-locked .iv-toolbar.is-resizing {
-      cursor: nwse-resize;
-    }
-
-    .iv-toolbar-group {
-      display: flex;
-      align-items: center;
-      gap: 2px;
-    }
+    .iv-toolbar-group { display: flex; align-items: center; gap: 2px; }
 
     .iv-btn {
       width: 26px;
@@ -296,55 +425,43 @@ export function setup(ctx: SpindleFrontendContext) {
       transition: background 0.15s, opacity 0.15s, color 0.15s;
       padding: 0;
     }
-
-    .iv-btn:hover {
-      opacity: 1;
-      background: var(--lumiverse-border, rgba(255, 255, 255, 0.12));
-    }
-
-    .iv-btn:active {
-      transform: scale(0.94);
-    }
-
+    .iv-btn:hover { opacity: 1; background: var(--lumiverse-border, rgba(255, 255, 255, 0.12)); }
+    .iv-btn:active { transform: scale(0.94); }
     .iv-btn.active {
       color: var(--lumiverse-accent, #38bdf8);
       background: rgba(56, 189, 248, 0.15);
       opacity: 1;
     }
-
-    .iv-btn-close {
-      color: var(--lumiverse-text, #e2e8f0);
-      font-size: 16px;
-      line-height: 1;
-    }
-
-    .iv-btn-close:hover {
-      background: rgba(239, 68, 68, 0.2);
-      color: #ef4444;
-    }
+    .iv-btn-close { font-size: 16px; line-height: 1; }
+    .iv-btn-close:hover { background: rgba(239, 68, 68, 0.2); color: #ef4444; }
 
     .iv-zoom-pill {
+      min-width: 34px;
+      text-align: center;
+      box-sizing: border-box;
       font-size: 11px;
       font-variant-numeric: tabular-nums;
-      padding: 2px 6px;
+      padding: 2px 4px;
       color: var(--lumiverse-text-muted, #94a3b8);
       cursor: pointer;
       border-radius: 4px;
       border: 1px solid transparent;
       transition: color 0.15s, background 0.15s;
     }
+    .iv-zoom-pill:hover { color: var(--lumiverse-text, #fff); background: var(--lumiverse-border, rgba(255, 255, 255, 0.08)); }
 
-    .iv-zoom-pill:hover {
-      color: var(--lumiverse-text, #fff);
-      background: var(--lumiverse-border, rgba(255, 255, 255, 0.08));
-    }
+    /* Pan/zoom lock dims the controls that would otherwise do nothing */
+    .iv-container.is-image-locked .iv-zoom-ctl { opacity: 0.3; cursor: not-allowed; }
+    .iv-container.is-image-locked .iv-zoom-ctl:hover { background: transparent; }
 
     /* Dropdown Menus */
     .iv-menu {
       position: absolute;
       top: 42px;
       right: 6px;
-      min-width: 175px;
+      min-width: 190px;
+      max-height: calc(100% - 48px);
+      overflow-y: auto;
       background: var(--lumiverse-fill, #16181d);
       border: 1px solid var(--lumiverse-border, rgba(255, 255, 255, 0.15));
       border-radius: var(--lumiverse-radius, 8px);
@@ -358,25 +475,17 @@ export function setup(ctx: SpindleFrontendContext) {
       box-sizing: border-box;
       animation: ivPopIn 0.12s ease-out forwards;
     }
-
     .iv-menu-header {
       font-size: 10px;
       font-weight: 600;
       color: var(--lumiverse-text-muted, #94a3b8);
-      padding: 4px 6px 4px;
+      padding: 4px 6px;
       text-transform: uppercase;
       letter-spacing: 0.5px;
     }
-
-    .iv-menu-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 4px;
-    }
-
-    .iv-menu-grid button:last-child:nth-child(odd) {
-      grid-column: span 2;
-    }
+    .iv-menu-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+    .iv-anchor-grid button:last-child:nth-child(odd) { grid-column: span 2; }
+    .iv-mode-grid button[data-mode="float"] { grid-column: span 2; }
 
     .iv-menu-btn {
       padding: 6px 8px;
@@ -389,10 +498,11 @@ export function setup(ctx: SpindleFrontendContext) {
       text-align: left;
       transition: background 0.15s, color 0.15s;
     }
-
-    .iv-menu-btn:hover {
-      background: var(--lumiverse-border, rgba(255, 255, 255, 0.15));
-      color: #fff;
+    .iv-menu-btn:hover { background: var(--lumiverse-border, rgba(255, 255, 255, 0.15)); color: #fff; }
+    .iv-menu-btn.active {
+      color: var(--lumiverse-accent, #38bdf8);
+      border-color: var(--lumiverse-accent, #38bdf8);
+      background: rgba(56, 189, 248, 0.12);
     }
 
     .iv-menu-item {
@@ -411,34 +521,22 @@ export function setup(ctx: SpindleFrontendContext) {
       box-sizing: border-box;
       transition: background 0.15s, color 0.15s;
     }
+    .iv-menu-item:hover { background: var(--lumiverse-border, rgba(255, 255, 255, 0.15)); color: #fff; }
+    .iv-menu-icon { font-size: 13px; width: 16px; text-align: center; }
+    .iv-menu-divider { height: 1px; background: var(--lumiverse-border, rgba(255, 255, 255, 0.08)); margin: 4px 0; }
 
-    .iv-menu-item:hover {
-      background: var(--lumiverse-border, rgba(255, 255, 255, 0.15));
-      color: #fff;
-    }
-
-    .iv-menu-icon {
-      font-size: 13px;
-      width: 16px;
-      text-align: center;
-    }
-
-    .iv-menu-divider {
-      height: 1px;
-      background: var(--lumiverse-border, rgba(255, 255, 255, 0.08));
-      margin: 4px 0;
-    }
-
-    /* Main Viewport Area */
+    /* Main Viewport Area. container-type lets the rotated image size itself in cq units. */
     .iv-viewport {
       flex: 1;
+      min-height: 0;
+      min-width: 0;
       position: relative;
       overflow: hidden;
       display: flex;
       align-items: center;
       justify-content: center;
       cursor: grab;
-      /* Subtle checkerboard pattern for transparency */
+      container-type: size;
       background-image: linear-gradient(45deg, rgba(255, 255, 255, 0.03) 25%, transparent 25%),
                         linear-gradient(-45deg, rgba(255, 255, 255, 0.03) 25%, transparent 25%),
                         linear-gradient(45deg, transparent 75%, rgba(255, 255, 255, 0.03) 75%),
@@ -446,14 +544,11 @@ export function setup(ctx: SpindleFrontendContext) {
       background-size: 16px 16px;
       background-position: 0 0, 0 8px, 8px -8px, -8px 0px;
     }
-
-    .iv-viewport.panning {
-      cursor: grabbing;
-    }
-
-    .iv-viewport.is-image-locked {
-      cursor: default !important;
-    }
+    .iv-viewport.panning { cursor: grabbing; }
+    .iv-viewport.is-image-locked { cursor: default; touch-action: none; }
+    /* Pan locked: grabbing anywhere moves the window instead (unless position is locked too) */
+    .iv-container:not(.is-docked):not(.is-locked) .iv-viewport.is-image-locked { cursor: grab; }
+    .iv-container.is-moving .iv-viewport.is-image-locked { cursor: grabbing; }
 
     .iv-img-wrapper {
       width: 100%;
@@ -468,7 +563,6 @@ export function setup(ctx: SpindleFrontendContext) {
       transform-origin: center center;
       pointer-events: none;
     }
-
     .iv-img {
       width: 100%;
       height: 100%;
@@ -479,8 +573,14 @@ export function setup(ctx: SpindleFrontendContext) {
       pointer-events: none;
       transition: opacity 0.15s ease-out;
     }
+    /* A 90/270deg image is laid out with swapped box dimensions so, once rotated, it fills the viewport */
+    .iv-img-wrapper.is-side .iv-img {
+      width: 100cqh;
+      height: 100cqw;
+      flex: none;
+      max-width: none;
+    }
 
-    /* Loading Spinner */
     .iv-spinner {
       position: absolute;
       width: 32px;
@@ -492,12 +592,8 @@ export function setup(ctx: SpindleFrontendContext) {
       display: none;
       z-index: 5;
     }
+    .iv-spinner.active { display: block; }
 
-    .iv-spinner.active {
-      display: block;
-    }
-
-    /* Error Message */
     .iv-error {
       display: none;
       position: absolute;
@@ -510,14 +606,19 @@ export function setup(ctx: SpindleFrontendContext) {
       border-radius: var(--lumiverse-radius, 6px);
       z-index: 5;
     }
+    .iv-error.active { display: block; }
 
-    .iv-error.active {
-      display: block;
-    }
+    /* Resize handles (floating only). SE carries the visible grip; the others are invisible hit areas. */
+    .iv-corner { position: absolute; z-index: 30; touch-action: none; }
+    .iv-corner-nw { top: 0; left: 0; width: 8px; height: 8px; cursor: nwse-resize; }
+    .iv-corner-ne { top: 0; right: 0; width: 8px; height: 8px; cursor: nesw-resize; }
+    .iv-corner-sw { bottom: 0; left: 0; width: 14px; height: 14px; cursor: nesw-resize; }
+    .iv-container.is-locked .iv-corner-nw,
+    .iv-container.is-locked .iv-corner-ne,
+    .iv-container.is-locked .iv-corner-sw { pointer-events: none; }
+    .iv-container.is-docked .iv-corner { display: none; }
 
-    /* Resize Handle */
     .image-viewer-resize {
-      position: absolute;
       bottom: 0;
       right: 0;
       width: 22px;
@@ -525,14 +626,8 @@ export function setup(ctx: SpindleFrontendContext) {
       cursor: se-resize;
       opacity: 0.6;
       transition: opacity 0.2s;
-      touch-action: none;
-      z-index: 30;
     }
-
-    .image-viewer-resize:hover {
-      opacity: 1;
-    }
-
+    .image-viewer-resize:hover { opacity: 1; }
     .image-viewer-resize::after {
       content: '';
       position: absolute;
@@ -540,26 +635,87 @@ export function setup(ctx: SpindleFrontendContext) {
       right: 3px;
       width: 12px;
       height: 12px;
-      background: repeating-linear-gradient(
-        -45deg,
-        var(--lumiverse-text, #fff),
-        var(--lumiverse-text, #fff) 1px,
-        transparent 1px,
-        transparent 4px
-      );
+      background: repeating-linear-gradient(-45deg, var(--lumiverse-text, #fff), var(--lumiverse-text, #fff) 1px, transparent 1px, transparent 4px);
       mask-image: linear-gradient(to top left, #000 50%, transparent 50%);
       -webkit-mask-image: linear-gradient(to top left, #000 50%, transparent 50%);
     }
-  `)
 
-  // References and state
+    /* Dock splitter on the panel's inner edge */
+    .iv-dock-resizer { display: none; position: absolute; z-index: 40; touch-action: none; background: transparent; transition: background 0.15s; }
+    .iv-dock-resizer:hover, .iv-dock-resizer.is-active { background: var(--lumiverse-accent, #38bdf8); opacity: 0.55; }
+    .iv-container.is-docked .iv-dock-resizer { display: block; }
+    .iv-container.dock-right .iv-dock-resizer { left: 0; top: 0; bottom: 0; width: 5px; cursor: ew-resize; }
+    .iv-container.dock-left .iv-dock-resizer { right: 0; top: 0; bottom: 0; width: 5px; cursor: ew-resize; }
+    .iv-container.dock-top .iv-dock-resizer { bottom: 0; left: 0; right: 0; height: 5px; cursor: ns-resize; }
+    .iv-container.dock-bottom .iv-dock-resizer { top: 0; left: 0; right: 0; height: 5px; cursor: ns-resize; }
+
+    @media (prefers-reduced-motion: reduce) {
+      .iv-container.pop-in, .iv-container.pop-out, .iv-menu { animation: none; }
+      .iv-container.pop-out { opacity: 0; }
+    }
+`
+
+const PREFS_KEY = 'image_viewer_prefs_v1'
+const DOCK_MODES: LayoutMode[] = ['dock-left', 'dock-right', 'dock-top', 'dock-bottom']
+
+interface ViewerPrefs {
+  mode: LayoutMode
+  lastDock: LayoutMode
+  dockSizes: Partial<Record<DockEdge, number>>
+  positionLocked: boolean
+  anchor: AnchorPosition | null
+}
+
+function loadPrefs(): ViewerPrefs {
+  const fallback: ViewerPrefs = { mode: 'float', lastDock: 'dock-right', dockSizes: {}, positionLocked: false, anchor: null }
+  try {
+    const raw = localStorage.getItem(PREFS_KEY)
+    if (!raw) return fallback
+    const parsed = JSON.parse(raw) as Partial<ViewerPrefs>
+    const isMode = (m: unknown): m is LayoutMode => m === 'float' || DOCK_MODES.includes(m as LayoutMode)
+    return {
+      mode: isMode(parsed.mode) ? parsed.mode : fallback.mode,
+      lastDock: isMode(parsed.lastDock) && parsed.lastDock !== 'float' ? parsed.lastDock : fallback.lastDock,
+      dockSizes: parsed.dockSizes && typeof parsed.dockSizes === 'object' ? parsed.dockSizes : {},
+      positionLocked: parsed.positionLocked === true,
+      anchor: (['top-left', 'top-right', 'center', 'bottom-left', 'bottom-right'] as const).includes(parsed.anchor as AnchorPosition)
+        ? (parsed.anchor as AnchorPosition)
+        : null,
+    }
+  } catch {
+    return fallback
+  }
+}
+
+function savePrefs(prefs: ViewerPrefs) {
+  try {
+    localStorage.setItem(PREFS_KEY, JSON.stringify(prefs))
+  } catch {
+    // storage unavailable (private mode / blocked) - preferences just won't persist
+  }
+}
+
+const edgeOf = (mode: LayoutMode): DockEdge | null => (mode === 'float' ? null : (mode.slice(5) as DockEdge))
+
+export function setup(ctx: SpindleFrontendContext) {
+  const removeStyles = ctx.dom.addStyle(VIEWER_CSS)
+
+  const prefs = loadPrefs()
+
+  // Host surfaces. The same container element is re-parented between them.
   let widget: SpindleFloatWidgetHandle | null = null
+  let dockPanel: SpindleDockPanelHandle | null = null
   let inputAction: SpindleInputBarActionHandle | null = null
+
+  // Layout state
+  let mode: LayoutMode = prefs.mode
+  let isOpen = false
+  let closeTimer: ReturnType<typeof setTimeout> | null = null
 
   // Image display state
   let currentImageUrl = ''
-  let naturalWidth = 0
-  let naturalHeight = 0
+  let naturalWidth = 600
+  let naturalHeight = 400
   let currentAspectRatio = 1
 
   // Pan & Zoom state
@@ -569,14 +725,16 @@ export function setup(ctx: SpindleFrontendContext) {
   let rotation = 0
   let flipH = false
 
-  // Lock and Anchor state
-  let isLocked = false
-  let isImageLocked = false
-  let currentAnchor: AnchorPosition | null = null
+  // Lock and anchor state. Pan/zoom starts locked; the window itself starts movable.
+  let isLocked = prefs.positionLocked
+  let isImageLocked = true
+  let currentAnchor: AnchorPosition | null = prefs.anchor
   let logicalX = 0
   let logicalY = 0
+  let floatW = 440
+  let floatH = 340
 
-  // Dom element references inside the widget
+  // DOM references (the container lives inside either the float widget root or the dock panel root)
   let containerEl: HTMLElement | null = null
   let toolbarEl: HTMLElement | null = null
   let viewportEl: HTMLElement | null = null
@@ -585,38 +743,53 @@ export function setup(ctx: SpindleFrontendContext) {
   let spinnerEl: HTMLElement | null = null
   let errorEl: HTMLElement | null = null
   let zoomPill: HTMLElement | null = null
-  let lockBtn: HTMLElement | null = null
-  let anchorMenuEl: HTMLElement | null = null
+  let imageLockBtn: HTMLElement | null = null
+  let layoutMenuEl: HTMLElement | null = null
   let moreMenuEl: HTMLElement | null = null
 
-  // Panning tracking
+  // Pan tracking
   let isPanning = false
   let panStartX = 0
   let panStartY = 0
 
-  // Resizing tracking (corner)
-  let isResizing = false
-  let resizeStartX = 0
-  let resizeStartY = 0
-  let resizeStartW = 0
+  // Window interaction tracking (move / toolbar resize / corner resize)
+  interface Interaction {
+    kind: 'move' | 'toolbar-resize' | 'corner'
+    corner: ResizeCorner
+    pointerId: number
+    el: HTMLElement
+    startX: number
+    startY: number
+    startLX: number
+    startLY: number
+    startVW: number
+    startWH: number
+    ar: number
+    anchor: AnchorPosition | null
+  }
+  let interaction: Interaction | null = null
 
-  // Toolbar interaction tracking
-  let isToolbarDragging = false
-  let isToolbarResizing = false
-  let tbStartX = 0
-  let tbStartY = 0
-  let tbStartLogicalX = 0
-  let tbStartLogicalY = 0
-  let tbStartW = 0
+  // Dock splitter tracking
+  let dockDrag: { pointerId: number; startX: number; startY: number; startSize: number } | null = null
 
   const TOOLBAR_HEIGHT = 39
 
-  // Safe measurement of toolbar height, even when widget is hidden (display: none)
+  const persist = () =>
+    savePrefs({
+      mode,
+      lastDock: mode !== 'float' ? mode : prefs.lastDock,
+      dockSizes: prefs.dockSizes,
+      positionLocked: isLocked,
+      anchor: currentAnchor,
+    })
+
+  // Safe measurement of toolbar height, even when the container is detached or hidden
   function getToolbarHeight(): number {
-    return (toolbarEl && toolbarEl.offsetHeight > 0) ? toolbarEl.offsetHeight : TOOLBAR_HEIGHT
+    return toolbarEl && toolbarEl.offsetHeight > 0 ? toolbarEl.offsetHeight : TOOLBAR_HEIGHT
   }
 
-  // Check if ui_panels permission is currently granted
+  const minViewportW = () => Math.min(MIN_VIEWPORT_WIDTH, window.innerWidth)
+
   async function hasUiPanelsPermission(): Promise<boolean> {
     try {
       const granted = await ctx.permissions.getGranted()
@@ -626,29 +799,29 @@ export function setup(ctx: SpindleFrontendContext) {
     }
   }
 
-  // Returns aspect ratio accounting for current 90° / 270° rotation
+  // Aspect ratio accounting for the current 90/270 degree rotation
   function getEffectiveAspectRatio(): number {
-    if (rotation % 180 !== 0) {
-      return 1 / (currentAspectRatio || 1)
-    }
-    return currentAspectRatio || 1
+    return rotation % 180 !== 0 ? 1 / (currentAspectRatio || 1) : currentAspectRatio || 1
   }
 
-  // Update image transform matrix
+  function getEffectiveNatural(): { w: number; h: number } {
+    return rotation % 180 !== 0 ? { w: naturalHeight, h: naturalWidth } : { w: naturalWidth, h: naturalHeight }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Transform / zoom
+  // ---------------------------------------------------------------------------
+
   function updateTransform() {
     if (!wrapperEl) return
     const flip = flipH ? -1 : 1
+    wrapperEl.classList.toggle('is-side', rotation % 180 !== 0)
     wrapperEl.style.transform = `translate(${panX}px, ${panY}px) scale(${scale}) rotate(${rotation}deg) scaleX(${flip})`
     if (zoomPill) {
-      if (scale === 1 && panX === 0 && panY === 0) {
-        zoomPill.textContent = 'Fit'
-      } else {
-        zoomPill.textContent = `${Math.round(scale * 100)}%`
-      }
+      zoomPill.textContent = scale === 1 && panX === 0 && panY === 0 ? 'Fit' : `${Math.round(scale * 100)}%`
     }
   }
 
-  // Reset transform to 100% Fit Aspect Ratio and centered
   function resetTransform() {
     scale = 1
     panX = 0
@@ -656,90 +829,296 @@ export function setup(ctx: SpindleFrontendContext) {
     updateTransform()
   }
 
-  // Close all open dropdown menus
+  function zoomBy(factor: number) {
+    if (isImageLocked) return
+    scale = Math.min(10, Math.max(0.2, Math.round(scale * factor * 100) / 100))
+    updateTransform()
+  }
+
+  // Click on the zoom pill: Fit -> 1:1 natural pixels -> Fit
+  function toggleActualSize() {
+    if (isImageLocked) return
+    if (scale === 1 && panX === 0 && panY === 0) {
+      if (!viewportEl) return
+      const eff = getEffectiveNatural()
+      const actual = calculateActualSizeScale(eff.w, eff.h, viewportEl.clientWidth, viewportEl.clientHeight, false)
+      scale = actual > 1.05 ? Math.min(10, Math.round(actual * 100) / 100) : 2
+      updateTransform()
+    } else {
+      resetTransform()
+    }
+  }
+
   function closeMenus() {
-    if (anchorMenuEl) anchorMenuEl.style.display = 'none'
+    if (layoutMenuEl) layoutMenuEl.style.display = 'none'
     if (moreMenuEl) moreMenuEl.style.display = 'none'
   }
 
-  // Toggle manual position lock
+  const menusOpen = () => layoutMenuEl?.style.display === 'flex' || moreMenuEl?.style.display === 'flex'
+
+  // ---------------------------------------------------------------------------
+  // Lock state
+  // ---------------------------------------------------------------------------
+
   function toggleLock(force?: boolean) {
     isLocked = typeof force === 'boolean' ? force : !isLocked
     updateLockState()
+    persist()
   }
 
   function updateLockState() {
-    if (lockBtn) {
-      lockBtn.textContent = isLocked ? '🔒' : '🔓'
-      lockBtn.title = isLocked ? 'Window Locked (Drag toolbar to resize)' : 'Window Unlocked (Drag toolbar to move)'
-      lockBtn.classList.toggle('active', isLocked)
-    }
-    if (containerEl) {
-      containerEl.classList.toggle('is-locked', isLocked)
-    }
-    const menuLockIcon = widget?.root.querySelector('.iv-lock-status-icon')
-    const menuLockText = widget?.root.querySelector('.iv-lock-status-text')
-    if (menuLockIcon) menuLockIcon.textContent = isLocked ? '🔒' : '🔓'
-    if (menuLockText) menuLockText.textContent = isLocked ? 'Unlock Position' : 'Lock Position'
+    containerEl?.classList.toggle('is-locked', isLocked)
+    const icon = containerEl?.querySelector('.iv-lock-status-icon')
+    const text = containerEl?.querySelector('.iv-lock-status-text')
+    if (icon) icon.textContent = isLocked ? '🔒' : '📌'
+    if (text) text.textContent = isLocked ? 'Unlock Position' : 'Lock Position'
   }
 
-  // Toggle image size / panning lock
   function toggleImageLock(force?: boolean) {
     isImageLocked = typeof force === 'boolean' ? force : !isImageLocked
+    if (isImageLocked) {
+      isPanning = false
+      viewportEl?.classList.remove('panning')
+    }
     updateImageLockState()
   }
 
   function updateImageLockState() {
-    if (viewportEl) {
-      viewportEl.classList.toggle('is-image-locked', isImageLocked)
+    viewportEl?.classList.toggle('is-image-locked', isImageLocked)
+    containerEl?.classList.toggle('is-image-locked', isImageLocked)
+    if (imageLockBtn) {
+      imageLockBtn.textContent = isImageLocked ? '🔒' : '✋'
+      imageLockBtn.title = isImageLocked
+        ? 'Pan & zoom locked - click to unlock (P)'
+        : 'Pan & zoom unlocked - click to lock (P)'
+      imageLockBtn.classList.toggle('active', !isImageLocked)
     }
-    const menuImgLockIcon = widget?.root.querySelector('.iv-imglock-status-icon')
-    const menuImgLockText = widget?.root.querySelector('.iv-imglock-status-text')
-    if (menuImgLockIcon) menuImgLockIcon.textContent = isImageLocked ? '🔒' : '🔓'
-    if (menuImgLockText) menuImgLockText.textContent = isImageLocked ? 'Unlock Image Pan/Zoom' : 'Lock Image Pan/Zoom'
   }
 
-  // Updates widget position and applies negative offset if needed so the window sits flush against edges
-  function updateWidgetPosition(targetX: number, targetY: number) {
-    if (!widget) return
-    const w = widget.root.offsetWidth || 440
-    const h = widget.root.offsetHeight || 340
-    const vw = window.innerWidth
-    const vh = window.innerHeight
+  // ---------------------------------------------------------------------------
+  // Floating window geometry
+  // ---------------------------------------------------------------------------
 
-    const placement = calculateEdgeFlushPlacement(targetX, targetY, w, h, vw, vh, 12)
+  function setFloatSize(widgetWidth: number, widgetHeight: number) {
+    if (!widget) return
+    floatW = widgetWidth
+    floatH = widgetHeight
+    widget.setSize(widgetWidth, widgetHeight)
+    widget.root.style.width = widgetWidth + 'px'
+    widget.root.style.height = widgetHeight + 'px'
+  }
+
+  // Places the window at (x, y) in screen space, using a transform to cover the host's 12px clamp padding
+  function placeFloat(x: number, y: number) {
+    if (!widget) return
+    const placement = calculateEdgeFlushPlacement(x, y, floatW, floatH, window.innerWidth, window.innerHeight, 12)
     logicalX = placement.hostX + placement.offsetX
     logicalY = placement.hostY + placement.offsetY
-
     widget.moveTo(placement.hostX, placement.hostY)
-
-    widget.root.style.transform = (placement.offsetX !== 0 || placement.offsetY !== 0)
-      ? `translate3d(${placement.offsetX}px, ${placement.offsetY}px, 0)`
-      : ''
+    widget.root.style.transform =
+      placement.offsetX !== 0 || placement.offsetY !== 0
+        ? `translate3d(${placement.offsetX}px, ${placement.offsetY}px, 0)`
+        : ''
   }
 
-  // Move widget to an anchor preset position
   function applyAnchor(anchor: AnchorPosition) {
     if (!widget) return
     currentAnchor = anchor
-    const w = widget.root.offsetWidth || 440
-    const h = widget.root.offsetHeight || 340
-    const { x, y } = calculateAnchorPosition(anchor, w, h, window.innerWidth, window.innerHeight, 0)
-    updateWidgetPosition(x, y)
-    closeMenus()
+    const { x, y } = calculateAnchorPosition(anchor, floatW, floatH, window.innerWidth, window.innerHeight, 0)
+    placeFloat(x, y)
   }
 
-  // Initialize the floating widget
-  function initWidget(): boolean {
-    if (widget) return true
+  // Re-places the window after a size/viewport change without disturbing where the user put it
+  function replaceFloat() {
+    if (currentAnchor) applyAnchor(currentAnchor)
+    else placeFloat(logicalX, logicalY)
+  }
 
+  // Sizes the window to the image (fit within 85% of the screen), keeping or recomputing the position
+  function fitFloatToImage(keepPosition: boolean) {
+    if (!widget) return
+    const eff = getEffectiveNatural()
+    const dims = calculateFitDimensions(
+      eff.w,
+      eff.h,
+      window.innerWidth * 0.85,
+      window.innerHeight * 0.85,
+      getToolbarHeight(),
+      minViewportW()
+    )
+    setFloatSize(dims.widgetWidth, dims.widgetHeight)
+    if (currentAnchor) {
+      applyAnchor(currentAnchor)
+    } else if (keepPosition) {
+      placeFloat(logicalX, logicalY)
+    } else {
+      placeFloat(
+        Math.max(0, Math.round((window.innerWidth - floatW) / 2)),
+        Math.max(0, Math.round((window.innerHeight - floatH) / 2))
+      )
+    }
+  }
+
+  // Swaps the window's viewport dimensions on rotation so it reshapes in place instead of drifting
+  function rotateView() {
+    rotation = (rotation + 90) % 360
+    if (mode === 'float' && widget) {
+      const tb = getToolbarHeight()
+      const oldVW = floatW
+      const oldVH = Math.max(80, floatH - tb)
+      const dims = calculateFitDimensions(
+        oldVH,
+        oldVW,
+        window.innerWidth * 0.9,
+        window.innerHeight * 0.9,
+        tb,
+        minViewportW()
+      )
+      setFloatSize(dims.widgetWidth, dims.widgetHeight)
+      replaceFloat()
+    }
+    updateTransform()
+  }
+
+  // Keeps the window inside the screen after the browser window changes size
+  function reflowFloat() {
+    if (!widget) return
+    const tb = getToolbarHeight()
+    const ar = getEffectiveAspectRatio()
+    if (floatW > window.innerWidth || floatH > window.innerHeight) {
+      const dims = calculateResizeDimensions(
+        floatW,
+        0,
+        ar,
+        window.innerWidth,
+        Math.max(80, window.innerHeight - tb),
+        tb,
+        minViewportW()
+      )
+      setFloatSize(dims.widgetWidth, dims.widgetHeight)
+    }
+    replaceFloat()
+  }
+
+  function resetWindow() {
+    currentAnchor = null
+    if (mode !== 'float') setMode('float')
+    else fitFloatToImage(false)
+    closeMenus()
+    persist()
+  }
+
+  // ---------------------------------------------------------------------------
+  // Window interactions (move / toolbar resize / corner resize)
+  // ---------------------------------------------------------------------------
+
+  function beginInteraction(e: PointerEvent, el: HTMLElement, kind: Interaction['kind'], corner: ResizeCorner = 'se') {
+    if (mode !== 'float' || !widget || e.button !== 0) return
+    e.preventDefault()
+    e.stopPropagation()
+    interaction = {
+      kind,
+      corner,
+      pointerId: e.pointerId,
+      el,
+      startX: e.clientX,
+      startY: e.clientY,
+      startLX: logicalX,
+      startLY: logicalY,
+      startVW: floatW,
+      startWH: floatH,
+      ar: getEffectiveAspectRatio(),
+      anchor: currentAnchor,
+    }
+    try {
+      el.setPointerCapture(e.pointerId)
+    } catch {
+      // capture can fail if the pointer is already gone
+    }
+    containerEl?.classList.add(kind === 'move' ? 'is-moving' : 'is-resizing')
+  }
+
+  function moveInteraction(e: PointerEvent) {
+    const it = interaction
+    if (!it || !widget || e.pointerId !== it.pointerId) return
+    const dx = e.clientX - it.startX
+    const dy = e.clientY - it.startY
+    const vw = window.innerWidth
+    const vh = window.innerHeight
+    const tb = getToolbarHeight()
+
+    if (it.kind === 'move') {
+      let x = it.startLX + dx
+      let y = it.startLY + dy
+      let snapped = false
+      if (!e.shiftKey) {
+        const s = snapPosition(x, y, floatW, floatH, vw, vh, 16)
+        x = s.x
+        y = s.y
+        snapped = !!(s.snapX || s.snapY)
+      }
+      containerEl?.classList.toggle('is-snapped', snapped)
+      placeFloat(x, y)
+    } else if (it.kind === 'toolbar-resize') {
+      const delta = Math.abs(dx) >= Math.abs(dy) ? dx : dy
+      const maxW = it.anchor ? vw : vw - it.startLX
+      const maxVH = (it.anchor ? vh : vh - it.startLY) - tb
+      const dims = calculateResizeDimensions(it.startVW, delta, it.ar, maxW, maxVH, tb, minViewportW())
+      setFloatSize(dims.widgetWidth, dims.widgetHeight)
+      if (it.anchor) applyAnchor(it.anchor)
+      else placeFloat(it.startLX, it.startLY)
+    } else {
+      const r = calculateCornerResize(
+        it.corner,
+        { x: it.startLX, y: it.startLY, viewportWidth: it.startVW, widgetHeight: it.startWH },
+        dx,
+        dy,
+        it.ar,
+        vw,
+        vh,
+        tb,
+        minViewportW()
+      )
+      setFloatSize(r.widgetWidth, r.widgetHeight)
+      placeFloat(r.x, r.y)
+    }
+  }
+
+  function endInteraction(e: PointerEvent) {
+    const it = interaction
+    if (!it || e.pointerId !== it.pointerId) return
+    interaction = null
+    containerEl?.classList.remove('is-moving', 'is-resizing', 'is-snapped')
+    try {
+      if (it.el.hasPointerCapture(e.pointerId)) it.el.releasePointerCapture(e.pointerId)
+    } catch {
+      // ignore
+    }
+    // Anchor is derived from where the window actually ended up
+    currentAnchor = detectAnchor(logicalX, logicalY, floatW, floatH, window.innerWidth, window.innerHeight)
+    persist()
+  }
+
+  function bindInteractionEvents(el: HTMLElement) {
+    el.addEventListener('pointermove', moveInteraction)
+    el.addEventListener('pointerup', endInteraction)
+    el.addEventListener('pointercancel', endInteraction)
+    el.addEventListener('lostpointercapture', endInteraction)
+  }
+
+  // ---------------------------------------------------------------------------
+  // Hosting: float widget vs. DOM-aware dock panel
+  // ---------------------------------------------------------------------------
+
+  function ensureWidget(): boolean {
+    if (widget) return true
     try {
       widget = ctx.ui.createFloatWidget({
-        width: 440,
-        height: 340,
+        width: floatW,
+        height: floatH,
         initialPosition: {
-          x: Math.max(0, Math.round((window.innerWidth - 440) / 2)),
-          y: Math.max(0, Math.round((window.innerHeight - 340) / 2)),
+          x: Math.max(0, Math.round((window.innerWidth - floatW) / 2)),
+          y: Math.max(0, Math.round((window.innerHeight - floatH) / 2)),
         },
         snapToEdge: false,
         tooltip: 'Image Viewer',
@@ -749,56 +1128,224 @@ export function setup(ctx: SpindleFrontendContext) {
       console.error('[Image Viewer] Failed to create float widget:', err)
       return false
     }
+    widget.setVisible(false)
+    // Safety net: if the host ever drags the widget itself, adopt its position as ours
+    widget.onDragEnd((pos) => {
+      currentAnchor = null
+      placeFloat(pos.x, pos.y)
+      currentAnchor = detectAnchor(logicalX, logicalY, floatW, floatH, window.innerWidth, window.innerHeight)
+    })
+    return true
+  }
 
-    widget.root.innerHTML = `
+  function dockSizeFor(edge: DockEdge): number {
+    return clampDockSize(
+      prefs.dockSizes[edge] ?? defaultDockSize(edge, window.innerWidth, window.innerHeight),
+      edge,
+      window.innerWidth,
+      window.innerHeight
+    )
+  }
+
+  function unmountDock() {
+    if (!dockPanel) return
+    containerEl?.remove()
+    try {
+      dockPanel.destroy()
+    } catch {
+      // already gone
+    }
+    dockPanel = null
+  }
+
+  function applyModeClasses() {
+    if (!containerEl) return
+    const edge = edgeOf(mode)
+    containerEl.classList.toggle('is-docked', !!edge)
+    for (const e of ['left', 'right', 'top', 'bottom'] as const) {
+      containerEl.classList.toggle('dock-' + e, edge === e)
+    }
+    containerEl.querySelectorAll<HTMLElement>('[data-mode]').forEach((btn) => {
+      btn.classList.toggle('active', btn.dataset.mode === mode)
+    })
+  }
+
+  // Mounts the container into the surface for the current mode and shows it
+  function mountLayout(animate: boolean): boolean {
+    if (!containerEl) return false
+    if (closeTimer) {
+      clearTimeout(closeTimer)
+      closeTimer = null
+    }
+    const edge = edgeOf(mode)
+
+    if (!edge) {
+      unmountDock()
+      if (!ensureWidget() || !widget) return false
+      const wasVisible = widget.isVisible() && isOpen
+      if (containerEl.parentElement !== widget.root) widget.root.appendChild(containerEl)
+      applyModeClasses()
+      containerEl.classList.remove('pop-out')
+      fitFloatToImage(wasVisible)
+      widget.setVisible(true)
+      if (animate) {
+        containerEl.classList.remove('pop-in')
+        void containerEl.offsetWidth // restart the animation
+        containerEl.classList.add('pop-in')
+      }
+    } else {
+      if (widget?.isVisible()) widget.setVisible(false)
+      if (typeof ctx.ui.requestDockPanel !== 'function') {
+        console.warn('[Image Viewer] This Lumiverse build has no dock panel API; staying in float mode')
+        mode = 'float'
+        return mountLayout(animate)
+      }
+      if (!dockPanel) {
+        try {
+          dockPanel = ctx.ui.requestDockPanel({
+            edge,
+            title: 'Image Viewer',
+            size: dockSizeFor(edge),
+            minSize: DOCK_MIN_SIZE,
+            maxSize: clampDockSize(Infinity, edge, window.innerWidth, window.innerHeight),
+            resizable: false,
+            chromeless: true,
+          })
+        } catch (err) {
+          console.warn('[Image Viewer] Dock panel unavailable, falling back to float:', err)
+          mode = 'float'
+          return mountLayout(animate)
+        }
+        dockPanel.root.style.cssText =
+          'display:flex;width:100%;height:100%;min-width:0;min-height:0;overflow:hidden;'
+        dockPanel.onVisibilityChange((visible) => {
+          isOpen = visible
+        })
+      }
+      containerEl.classList.remove('pop-in', 'pop-out')
+      if (containerEl.parentElement !== dockPanel.root) dockPanel.root.appendChild(containerEl)
+      applyModeClasses()
+      dockPanel.expand()
+    }
+    isOpen = true
+    return true
+  }
+
+  function setMode(next: LayoutMode) {
+    if (next === mode && isOpen) {
+      closeMenus()
+      return
+    }
+    const prev = mode
+    mode = next
+    if (mode !== 'float') prefs.lastDock = mode
+    if (isOpen) {
+      // Switching docks: the old dock edge must go before the new one is requested
+      if (prev !== mode) unmountDock()
+      if (!mountLayout(false)) {
+        mode = prev
+      }
+    } else {
+      applyModeClasses()
+    }
+    closeMenus()
+    persist()
+  }
+
+  function toggleDock() {
+    setMode(mode === 'float' ? prefs.lastDock : 'float')
+  }
+
+  function closeViewer() {
+    if (!isOpen || !containerEl) return
+    closeMenus()
+    isOpen = false
+    interaction = null
+    if (mode === 'float' && widget) {
+      containerEl.classList.remove('pop-in')
+      containerEl.classList.add('pop-out')
+      closeTimer = setTimeout(() => {
+        closeTimer = null
+        if (!isOpen && widget) {
+          widget.setVisible(false)
+          containerEl?.classList.remove('pop-out')
+        }
+      }, 150)
+    } else {
+      unmountDock()
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Container (built once, re-parented between host surfaces)
+  // ---------------------------------------------------------------------------
+
+  function ensureContainer() {
+    if (containerEl) return
+
+    const root = document.createElement('div')
+    root.style.cssText = 'display:contents;'
+    root.innerHTML = `
       <div class="iv-container">
         <div class="iv-toolbar">
           <div class="iv-toolbar-group">
-            <button class="iv-btn" data-action="zoom-out" title="Zoom Out (-)">−</button>
-            <span class="iv-zoom-pill" data-action="zoom-fit" title="Click to Fit Aspect Ratio (0)">Fit</span>
-            <button class="iv-btn" data-action="zoom-in" title="Zoom In (+)">+</button>
-            <button class="iv-btn" data-action="zoom-fit" title="Fit Aspect Ratio (0)">⊡</button>
+            <button class="iv-btn iv-zoom-ctl" data-action="zoom-out" title="Zoom Out (-)">−</button>
+            <span class="iv-zoom-pill iv-zoom-ctl" data-action="zoom-toggle" title="Click: Fit / 100% (0)">Fit</span>
+            <button class="iv-btn iv-zoom-ctl" data-action="zoom-in" title="Zoom In (+)">+</button>
             <button class="iv-btn" data-action="rotate" title="Rotate 90° (R)">↻</button>
             <button class="iv-btn" data-action="flip" title="Flip Horizontal (H)">⇄</button>
           </div>
           <div class="iv-toolbar-group">
-            <button class="iv-btn" data-action="anchor-menu" title="Anchor Presets (↖, ↗, ✛, ↙, ↘)">⚓</button>
-            <button class="iv-btn iv-btn-lock" data-action="toggle-lock" title="Window Unlocked (Drag toolbar to move)">🔓</button>
+            <button class="iv-btn iv-btn-imglock" data-action="toggle-image-lock" title="Pan & zoom locked - click to unlock (P)">🔒</button>
+            <button class="iv-btn" data-action="layout-menu" title="Layout, docking & anchors (D toggles dock)">⊞</button>
             <button class="iv-btn" data-action="more-menu" title="More options">⋮</button>
             <button class="iv-btn iv-btn-close" data-action="close" title="Close (Esc)">×</button>
           </div>
         </div>
 
-        <!-- Anchor Presets Dropdown -->
-        <div class="iv-menu iv-anchor-menu" style="display: none;">
-          <div class="iv-menu-header">Anchor Presets</div>
-          <div class="iv-menu-grid">
-            <button class="iv-menu-btn" data-action="anchor-tl" title="Top Left">↖ Top Left</button>
-            <button class="iv-menu-btn" data-action="anchor-tr" title="Top Right">↗ Top Right</button>
-            <button class="iv-menu-btn" data-action="anchor-center" title="Center">✛ Center</button>
-            <button class="iv-menu-btn" data-action="anchor-bl" title="Bottom Left">↙ Bottom Left</button>
-            <button class="iv-menu-btn" data-action="anchor-br" title="Bottom Right">↘ Bottom Right</button>
+        <div class="iv-menu iv-layout-menu" style="display: none;">
+          <div class="iv-menu-header">Mode</div>
+          <div class="iv-menu-grid iv-mode-grid">
+            <button class="iv-menu-btn" data-action="set-mode" data-mode="float" title="Free-floating window">▢ Float</button>
+            <button class="iv-menu-btn" data-action="set-mode" data-mode="dock-left" title="Dock left of the chat">◧ Dock Left</button>
+            <button class="iv-menu-btn" data-action="set-mode" data-mode="dock-right" title="Dock right of the chat">◨ Dock Right</button>
+            <button class="iv-menu-btn" data-action="set-mode" data-mode="dock-top" title="Dock above the chat">⬒ Dock Top</button>
+            <button class="iv-menu-btn" data-action="set-mode" data-mode="dock-bottom" title="Dock below the chat">⬓ Dock Bottom</button>
+          </div>
+          <div class="iv-float-only">
+            <div class="iv-menu-divider"></div>
+            <div class="iv-menu-header">Anchor</div>
+            <div class="iv-menu-grid iv-anchor-grid">
+              <button class="iv-menu-btn" data-action="anchor" data-anchor="top-left">↖ Top Left</button>
+              <button class="iv-menu-btn" data-action="anchor" data-anchor="top-right">↗ Top Right</button>
+              <button class="iv-menu-btn" data-action="anchor" data-anchor="center">✛ Center</button>
+              <button class="iv-menu-btn" data-action="anchor" data-anchor="bottom-left">↙ Bottom Left</button>
+              <button class="iv-menu-btn" data-action="anchor" data-anchor="bottom-right">↘ Bottom Right</button>
+            </div>
+            <div class="iv-menu-divider"></div>
+            <button class="iv-menu-item" data-action="toggle-lock" title="Locked: toolbar drag resizes instead of moving (L)">
+              <span class="iv-menu-icon iv-lock-status-icon">📌</span>
+              <span class="iv-lock-status-text">Lock Position</span>
+            </button>
+            <button class="iv-menu-item" data-action="reset-window">
+              <span class="iv-menu-icon">⟲</span>
+              <span>Reset Window</span>
+            </button>
           </div>
         </div>
 
-        <!-- More Options Dropdown -->
         <div class="iv-menu iv-more-menu" style="display: none;">
           <button class="iv-menu-item" data-action="copy-url">
             <span class="iv-menu-icon">📋</span>
-            <span>Copy Image Link</span>
+            <span class="iv-copy-label">Copy Image Link</span>
           </button>
           <button class="iv-menu-item" data-action="open-tab">
             <span class="iv-menu-icon">↗</span>
             <span>Open in New Tab</span>
           </button>
-          <div class="iv-menu-divider"></div>
-          <button class="iv-menu-item" data-action="toggle-image-lock">
-            <span class="iv-menu-icon iv-imglock-status-icon">🔓</span>
-            <span class="iv-imglock-status-text">Lock Image Pan/Zoom</span>
-          </button>
-          <button class="iv-menu-item" data-action="toggle-lock">
-            <span class="iv-menu-icon iv-lock-status-icon">🔓</span>
-            <span class="iv-lock-status-text">Lock Position</span>
+          <button class="iv-menu-item" data-action="download">
+            <span class="iv-menu-icon">⬇</span>
+            <span>Download Image</span>
           </button>
         </div>
 
@@ -809,210 +1356,88 @@ export function setup(ctx: SpindleFrontendContext) {
             <img class="iv-img" src="" alt="Preview" draggable="false" />
           </div>
         </div>
-        <div class="image-viewer-resize" data-direction="se" title="Resize"></div>
+
+        <div class="iv-corner iv-corner-nw" data-corner="nw"></div>
+        <div class="iv-corner iv-corner-ne" data-corner="ne"></div>
+        <div class="iv-corner iv-corner-sw" data-corner="sw"></div>
+        <div class="iv-corner image-viewer-resize" data-corner="se" title="Resize"></div>
+        <div class="iv-dock-resizer" title="Drag to resize"></div>
       </div>
     `
+    containerEl = root.firstElementChild as HTMLElement
+    containerEl.remove()
 
-    containerEl = widget.root.querySelector('.iv-container')
-    toolbarEl = widget.root.querySelector('.iv-toolbar')
-    viewportEl = widget.root.querySelector('.iv-viewport')
-    wrapperEl = widget.root.querySelector('.iv-img-wrapper')
-    imgEl = widget.root.querySelector('.iv-img')
-    spinnerEl = widget.root.querySelector('.iv-spinner')
-    errorEl = widget.root.querySelector('.iv-error')
-    zoomPill = widget.root.querySelector('.iv-zoom-pill')
-    lockBtn = widget.root.querySelector('.iv-btn-lock')
-    anchorMenuEl = widget.root.querySelector('.iv-anchor-menu')
-    moreMenuEl = widget.root.querySelector('.iv-more-menu')
+    toolbarEl = containerEl.querySelector('.iv-toolbar')
+    viewportEl = containerEl.querySelector('.iv-viewport')
+    wrapperEl = containerEl.querySelector('.iv-img-wrapper')
+    imgEl = containerEl.querySelector('.iv-img')
+    spinnerEl = containerEl.querySelector('.iv-spinner')
+    errorEl = containerEl.querySelector('.iv-error')
+    zoomPill = containerEl.querySelector('.iv-zoom-pill')
+    imageLockBtn = containerEl.querySelector('.iv-btn-imglock')
+    layoutMenuEl = containerEl.querySelector('.iv-layout-menu')
+    moreMenuEl = containerEl.querySelector('.iv-more-menu')
 
-    // Start hidden
-    widget.setVisible(false)
-
-    // Toolbar drag: Moves window when unlocked; Resizes window when locked
+    // Toolbar: moves the window when unlocked, resizes it (aspect locked) when locked
     toolbarEl?.addEventListener('pointerdown', (e: PointerEvent) => {
-      const isInteractive = (e.target as HTMLElement).closest('button, input, select, .iv-zoom-pill, .iv-menu')
-      if (isInteractive) return
+      if ((e.target as HTMLElement).closest('button, input, select, .iv-zoom-pill, .iv-menu')) return
+      if (mode !== 'float') return
+      beginInteraction(e, toolbarEl!, isLocked ? 'toolbar-resize' : 'move')
+    })
+    if (toolbarEl) bindInteractionEvents(toolbarEl)
 
-      // Suppress Spindle's built-in drag
-      e.preventDefault()
-      e.stopPropagation()
-
-      if (!widget || !toolbarEl) return
-
-      tbStartX = e.clientX
-      tbStartY = e.clientY
-      tbStartLogicalX = logicalX
-      tbStartLogicalY = logicalY
-      tbStartW = widget.root.offsetWidth
-
-      toolbarEl.setPointerCapture(e.pointerId)
-
-      if (isLocked) {
-        isToolbarResizing = true
-        toolbarEl.classList.add('is-resizing')
-      } else {
-        isToolbarDragging = true
-        toolbarEl.classList.add('is-dragging')
-      }
+    // Corner handles
+    containerEl.querySelectorAll<HTMLElement>('.iv-corner').forEach((handle) => {
+      handle.addEventListener('pointerdown', (e: PointerEvent) => {
+        beginInteraction(e, handle, 'corner', (handle.dataset.corner as ResizeCorner) || 'se')
+      })
+      bindInteractionEvents(handle)
     })
 
-    toolbarEl?.addEventListener('pointermove', (e: PointerEvent) => {
-      if (!widget) return
-
-      if (isToolbarDragging) {
-        const deltaX = e.clientX - tbStartX
-        const deltaY = e.clientY - tbStartY
-        updateWidgetPosition(tbStartLogicalX + deltaX, tbStartLogicalY + deltaY)
-        currentAnchor = null
-      } else if (isToolbarResizing) {
-        const deltaX = e.clientX - tbStartX
-        const deltaY = e.clientY - tbStartY
-        const delta = Math.abs(deltaX) >= Math.abs(deltaY) ? deltaX : deltaY
-
-        const toolbarH = getToolbarHeight()
-        const effectiveAR = getEffectiveAspectRatio()
-        const maxW = window.innerWidth
-        const maxH = window.innerHeight
-
-        const dims = calculateResizeDimensions(
-          tbStartW,
-          delta,
-          effectiveAR,
-          maxW,
-          maxH - toolbarH,
-          toolbarH,
-          280
-        )
-
-        widget.setSize(dims.widgetWidth, dims.widgetHeight)
-        widget.root.style.width = dims.widgetWidth + 'px'
-        widget.root.style.height = dims.widgetHeight + 'px'
-
-        if (currentAnchor) {
-          applyAnchor(currentAnchor)
-        } else {
-          updateWidgetPosition(tbStartLogicalX, tbStartLogicalY)
-        }
-      }
-    })
-
-    const endToolbarInteraction = (e: PointerEvent) => {
-      if (isToolbarDragging) {
-        isToolbarDragging = false
-        toolbarEl?.classList.remove('is-dragging')
-      }
-      if (isToolbarResizing) {
-        isToolbarResizing = false
-        toolbarEl?.classList.remove('is-resizing')
-      }
-      if (toolbarEl && toolbarEl.hasPointerCapture(e.pointerId)) {
-        try {
-          toolbarEl.releasePointerCapture(e.pointerId)
-        } catch {
-          // ignore
-        }
-      }
-    }
-
-    toolbarEl?.addEventListener('pointerup', endToolbarInteraction)
-    toolbarEl?.addEventListener('lostpointercapture', endToolbarInteraction)
-
-    // Close menus on outside click
-    document.addEventListener('pointerdown', (e: PointerEvent) => {
-      if (containerEl && !containerEl.contains(e.target as Node)) {
-        closeMenus()
-      }
-    })
-
-    // Container click handler for all buttons and menu items
-    containerEl?.addEventListener('click', (e) => {
+    // Click handling for buttons and menu items
+    containerEl.addEventListener('click', (e) => {
       const target = (e.target as HTMLElement).closest('[data-action]') as HTMLElement | null
       if (!target) return
-      const action = target.getAttribute('data-action')
-
-      switch (action) {
+      switch (target.getAttribute('data-action')) {
         case 'zoom-in':
-          if (!isImageLocked) {
-            scale = Math.min(10, Math.round(scale * 1.25 * 100) / 100)
-            updateTransform()
-          }
+          zoomBy(1.25)
           break
         case 'zoom-out':
-          if (!isImageLocked) {
-            scale = Math.max(0.2, Math.round((scale / 1.25) * 100) / 100)
-            updateTransform()
-          }
+          zoomBy(1 / 1.25)
           break
-        case 'zoom-fit':
-          if (!isImageLocked) {
-            resetTransform()
-          }
-          closeMenus()
+        case 'zoom-toggle':
+          toggleActualSize()
           break
-        case 'rotate': {
-          rotation = (rotation + 90) % 360
-          // Adjust window dimensions to match the rotated aspect ratio
-          if (widget && containerEl) {
-            const toolbarH = getToolbarHeight()
-            const currentViewportH = Math.max(80, widget.root.offsetHeight - toolbarH)
-            const effectiveAR = getEffectiveAspectRatio()
-
-            const dims = calculateFitDimensions(
-              Math.round(currentViewportH * effectiveAR),
-              currentViewportH,
-              window.innerWidth * 0.85,
-              window.innerHeight * 0.85,
-              toolbarH,
-              280
-            )
-
-            widget.setSize(dims.widgetWidth, dims.widgetHeight)
-            widget.root.style.width = dims.widgetWidth + 'px'
-            widget.root.style.height = dims.widgetHeight + 'px'
-
-            if (currentAnchor) {
-              applyAnchor(currentAnchor)
-            }
-          }
-          updateTransform()
+        case 'rotate':
+          rotateView()
           break
-        }
         case 'flip':
           flipH = !flipH
           updateTransform()
           break
-        case 'anchor-menu':
-          if (anchorMenuEl) {
-            const isShown = anchorMenuEl.style.display !== 'none'
-            closeMenus()
-            anchorMenuEl.style.display = isShown ? 'none' : 'flex'
-          }
+        case 'layout-menu':
+        case 'more-menu': {
+          const menu = target.getAttribute('data-action') === 'layout-menu' ? layoutMenuEl : moreMenuEl
+          if (!menu) break
+          const wasShown = menu.style.display === 'flex'
+          closeMenus()
+          menu.style.display = wasShown ? 'none' : 'flex'
           break
-        case 'more-menu':
-          if (moreMenuEl) {
-            const isShown = moreMenuEl.style.display !== 'none'
-            closeMenus()
-            moreMenuEl.style.display = isShown ? 'none' : 'flex'
-          }
+        }
+        case 'set-mode':
+          setMode((target.dataset.mode as LayoutMode) || 'float')
           break
-        case 'anchor-tl':
-          applyAnchor('top-left')
-          break
-        case 'anchor-tr':
-          applyAnchor('top-right')
-          break
-        case 'anchor-center':
-          applyAnchor('center')
-          break
-        case 'anchor-bl':
-          applyAnchor('bottom-left')
-          break
-        case 'anchor-br':
-          applyAnchor('bottom-right')
+        case 'anchor':
+          applyAnchor(target.dataset.anchor as AnchorPosition)
+          persist()
+          closeMenus()
           break
         case 'toggle-lock':
           toggleLock()
           closeMenus()
+          break
+        case 'reset-window':
+          resetWindow()
           break
         case 'toggle-image-lock':
           toggleImageLock()
@@ -1020,17 +1445,34 @@ export function setup(ctx: SpindleFrontendContext) {
           break
         case 'copy-url':
           if (currentImageUrl) {
-            navigator.clipboard.writeText(currentImageUrl).then(() => {
-              target.textContent = '✓ Copied!'
-              setTimeout(() => {
-                closeMenus()
-              }, 800)
-            })
+            navigator.clipboard
+              .writeText(new URL(currentImageUrl, window.location.origin).toString())
+              .then(() => {
+                const label = target.querySelector('.iv-copy-label')
+                if (label) label.textContent = '✓ Copied!'
+                setTimeout(() => {
+                  if (label) label.textContent = 'Copy Image Link'
+                  closeMenus()
+                }, 800)
+              })
+              .catch(() => closeMenus())
           }
           break
         case 'open-tab':
           if (currentImageUrl) {
             window.open(currentImageUrl, '_blank', 'noopener,noreferrer')
+            closeMenus()
+          }
+          break
+        case 'download':
+          if (currentImageUrl) {
+            const a = document.createElement('a')
+            a.href = currentImageUrl
+            a.download = ''
+            a.rel = 'noopener'
+            document.body.appendChild(a)
+            a.click()
+            a.remove()
             closeMenus()
           }
           break
@@ -1040,32 +1482,35 @@ export function setup(ctx: SpindleFrontendContext) {
       }
     })
 
-    // Viewport mouse wheel zoom (centered on pointer)
-    viewportEl?.addEventListener('wheel', (e: WheelEvent) => {
-      if (isImageLocked) return
-      e.preventDefault()
-      if (!viewportEl) return
+    // Wheel zoom, centered on the pointer. While pan/zoom is locked the wheel is left alone.
+    viewportEl?.addEventListener(
+      'wheel',
+      (e: WheelEvent) => {
+        if (isImageLocked || !viewportEl) return
+        e.preventDefault()
+        const rect = viewportEl.getBoundingClientRect()
+        const mouseX = e.clientX - rect.left - rect.width / 2
+        const mouseY = e.clientY - rect.top - rect.height / 2
+        const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15
+        const newScale = Math.min(10, Math.max(0.2, scale * factor))
+        panX = mouseX - ((mouseX - panX) * newScale) / scale
+        panY = mouseY - ((mouseY - panY) * newScale) / scale
+        scale = Math.round(newScale * 1000) / 1000
+        updateTransform()
+      },
+      { passive: false }
+    )
 
-      const rect = viewportEl.getBoundingClientRect()
-      const mouseX = e.clientX - rect.left - rect.width / 2
-      const mouseY = e.clientY - rect.top - rect.height / 2
-
-      const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15
-      const newScale = Math.min(10, Math.max(0.2, scale * factor))
-
-      // Zoom towards mouse pointer
-      panX = mouseX - ((mouseX - panX) * newScale) / scale
-      panY = mouseY - ((mouseY - panY) * newScale) / scale
-      scale = Math.round(newScale * 1000) / 1000
-
-      updateTransform()
-    }, { passive: false })
-
-    // Viewport drag-to-pan
+    // Viewport drag: pans when unlocked; when pan is locked it drags the window instead
     viewportEl?.addEventListener('pointerdown', (e: PointerEvent) => {
-      if (e.button !== 0 || isImageLocked) return
-      if (!viewportEl) return
-
+      if (e.button !== 0 || !viewportEl) return
+      if (isImageLocked) {
+        if (mode === 'float') {
+          if (!isLocked) beginInteraction(e, viewportEl, 'move')
+          else e.preventDefault()
+        }
+        return
+      }
       e.preventDefault()
       isPanning = true
       panStartX = e.clientX - panX
@@ -1085,134 +1530,89 @@ export function setup(ctx: SpindleFrontendContext) {
       if (!isPanning) return
       isPanning = false
       viewportEl?.classList.remove('panning')
-      if (viewportEl && viewportEl.hasPointerCapture(e.pointerId)) {
-        try {
-          viewportEl.releasePointerCapture(e.pointerId)
-        } catch {
-          // ignore
-        }
+      try {
+        if (viewportEl?.hasPointerCapture(e.pointerId)) viewportEl.releasePointerCapture(e.pointerId)
+      } catch {
+        // ignore
       }
     }
-
     viewportEl?.addEventListener('pointerup', endPan)
+    viewportEl?.addEventListener('pointercancel', endPan)
     viewportEl?.addEventListener('lostpointercapture', endPan)
+    if (viewportEl) bindInteractionEvents(viewportEl)
 
-    // Double click to toggle Fit Aspect Ratio vs 200% zoom
+    // Double click: Fit <-> 200% at the cursor
     viewportEl?.addEventListener('dblclick', (e: MouseEvent) => {
-      if (isImageLocked) return
+      if (isImageLocked || !viewportEl) return
       if (scale === 1 && panX === 0 && panY === 0) {
+        const rect = viewportEl.getBoundingClientRect()
+        const mouseX = e.clientX - rect.left - rect.width / 2
+        const mouseY = e.clientY - rect.top - rect.height / 2
         scale = 2
-        if (viewportEl) {
-          const rect = viewportEl.getBoundingClientRect()
-          const mouseX = e.clientX - rect.left - rect.width / 2
-          const mouseY = e.clientY - rect.top - rect.height / 2
-          panX = mouseX - mouseX * 2
-          panY = mouseY - mouseY * 2
-        }
+        panX = mouseX - mouseX * 2
+        panY = mouseY - mouseY * 2
       } else {
         resetTransform()
       }
       updateTransform()
     })
 
-    // Corner resize handle: strictly preserves image aspect ratio at every step
-    const resizeHandle = widget.root.querySelector('.image-viewer-resize') as HTMLElement | null
-    if (resizeHandle) {
-      resizeHandle.addEventListener('pointerdown', (e: PointerEvent) => {
-        e.preventDefault()
-        e.stopPropagation()
-        e.stopImmediatePropagation()
-
-        if (!widget) return
-
-        isResizing = true
-        resizeStartX = e.clientX
-        resizeStartY = e.clientY
-        resizeStartW = widget.root.offsetWidth
-
-        resizeHandle.setPointerCapture(e.pointerId)
-        widget.root.style.pointerEvents = 'none'
-        resizeHandle.style.pointerEvents = 'auto'
-      })
-
-      resizeHandle.addEventListener('pointermove', (e: PointerEvent) => {
-        if (!isResizing || !widget) return
-
-        const deltaX = e.clientX - resizeStartX
-        const deltaY = e.clientY - resizeStartY
-        const delta = Math.max(deltaX, deltaY)
-
-        const toolbarH = getToolbarHeight()
-        const maxViewportW = window.innerWidth - logicalX
-        const maxViewportH = window.innerHeight - logicalY - toolbarH
-
-        const effectiveAR = getEffectiveAspectRatio()
-
-        const dims = calculateResizeDimensions(
-          resizeStartW,
-          delta,
-          effectiveAR,
-          maxViewportW,
-          maxViewportH,
-          toolbarH,
-          280
-        )
-
-        widget.setSize(dims.widgetWidth, dims.widgetHeight)
-        widget.root.style.width = dims.widgetWidth + 'px'
-        widget.root.style.height = dims.widgetHeight + 'px'
-
-        if (currentAnchor) {
-          applyAnchor(currentAnchor)
-        } else {
-          updateWidgetPosition(logicalX, logicalY)
-        }
-      })
-
-      const endResize = (e: PointerEvent) => {
-        if (!isResizing || !widget) return
-        isResizing = false
-        widget.root.style.pointerEvents = ''
-        resizeHandle.style.pointerEvents = ''
-        if (resizeHandle.hasPointerCapture(e.pointerId)) {
-          try {
-            resizeHandle.releasePointerCapture(e.pointerId)
-          } catch {
-            // ignore
-          }
-        }
+    // Dock splitter on the panel's inner edge
+    const splitter = containerEl.querySelector('.iv-dock-resizer') as HTMLElement | null
+    splitter?.addEventListener('pointerdown', (e: PointerEvent) => {
+      const edge = edgeOf(mode)
+      if (!edge || !dockPanel || e.button !== 0) return
+      e.preventDefault()
+      e.stopPropagation()
+      dockDrag = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, startSize: dockSizeFor(edge) }
+      splitter.classList.add('is-active')
+      splitter.setPointerCapture(e.pointerId)
+    })
+    splitter?.addEventListener('pointermove', (e: PointerEvent) => {
+      const edge = edgeOf(mode)
+      if (!dockDrag || !edge || !dockPanel || e.pointerId !== dockDrag.pointerId) return
+      const dx = e.clientX - dockDrag.startX
+      const dy = e.clientY - dockDrag.startY
+      const grow = edge === 'left' ? dx : edge === 'right' ? -dx : edge === 'top' ? dy : -dy
+      const size = clampDockSize(dockDrag.startSize + grow, edge, window.innerWidth, window.innerHeight)
+      prefs.dockSizes[edge] = size
+      dockPanel.setSize(size)
+    })
+    const endDockDrag = (e: PointerEvent) => {
+      if (!dockDrag || e.pointerId !== dockDrag.pointerId) return
+      dockDrag = null
+      splitter?.classList.remove('is-active')
+      try {
+        if (splitter?.hasPointerCapture(e.pointerId)) splitter.releasePointerCapture(e.pointerId)
+      } catch {
+        // ignore
       }
-
-      resizeHandle.addEventListener('pointerup', endResize)
-      resizeHandle.addEventListener('lostpointercapture', endResize)
+      persist()
     }
+    splitter?.addEventListener('pointerup', endDockDrag)
+    splitter?.addEventListener('pointercancel', endDockDrag)
+    splitter?.addEventListener('lostpointercapture', endDockDrag)
 
-    return true
+    updateLockState()
+    updateImageLockState()
+    applyModeClasses()
   }
 
-  // Close the viewer with a pop-out animation
-  function closeViewer() {
-    if (!widget || !containerEl) return
-    closeMenus()
-    containerEl.classList.remove('pop-in')
-    containerEl.classList.add('pop-out')
-
-    setTimeout(() => {
-      if (widget) {
-        widget.setVisible(false)
-        containerEl?.classList.remove('pop-out')
-      }
-    }, 150)
+  // Close dropdown menus on outside press
+  const outsidePointerHandler = (e: PointerEvent) => {
+    if (containerEl && !containerEl.contains(e.target as Node)) closeMenus()
   }
+  document.addEventListener('pointerdown', outsidePointerHandler)
 
-  // Display an image in the viewer
+  // ---------------------------------------------------------------------------
+  // Opening an image
+  // ---------------------------------------------------------------------------
+
   async function showImage(rawUrl: string, altText = 'Image Preview') {
     const fullUrl = resolveFullImageUrl(rawUrl)
     currentImageUrl = fullUrl
 
-    // Ensure permission is granted
-    const hasPerm = await hasUiPanelsPermission()
-    if (!hasPerm) {
+    if (!(await hasUiPanelsPermission())) {
       try {
         const granted = await ctx.permissions.request(['ui_panels'], {
           reason: 'Image Viewer needs permission to open floating image panels.',
@@ -1224,17 +1624,19 @@ export function setup(ctx: SpindleFrontendContext) {
       }
     }
 
-    if (!initWidget() || !widget) return
+    ensureContainer()
+    if (!containerEl) return
 
-    // Show loading spinner
     spinnerEl?.classList.add('active')
     errorEl?.classList.remove('active')
     if (imgEl) imgEl.style.opacity = '0'
     closeMenus()
 
-    // Preload to get intrinsic dimensions
+    // Preload to learn intrinsic dimensions
     const loader = new Image()
     loader.onload = () => {
+      // A newer request may have replaced this one while it loaded
+      if (currentImageUrl !== fullUrl) return
       spinnerEl?.classList.remove('active')
       naturalWidth = loader.naturalWidth || 600
       naturalHeight = loader.naturalHeight || 400
@@ -1242,91 +1644,63 @@ export function setup(ctx: SpindleFrontendContext) {
       rotation = 0
       flipH = false
 
-      const toolbarH = getToolbarHeight()
-      const maxW = window.innerWidth * 0.85
-      const maxH = window.innerHeight * 0.85
-
-      const dims = calculateFitDimensions(
-        naturalWidth,
-        naturalHeight,
-        maxW,
-        maxH,
-        toolbarH,
-        280
-      )
-
-      widget!.setSize(dims.widgetWidth, dims.widgetHeight)
-      widget!.root.style.width = dims.widgetWidth + 'px'
-      widget!.root.style.height = dims.widgetHeight + 'px'
-
-      // Position widget based on current anchor or center
-      if (currentAnchor) {
-        applyAnchor(currentAnchor)
-      } else {
-        const posX = Math.max(0, Math.round((window.innerWidth - dims.widgetWidth) / 2))
-        const posY = Math.max(0, Math.round((window.innerHeight - dims.widgetHeight) / 2))
-        updateWidgetPosition(posX, posY)
-      }
-
-      // Set image source and reset transforms to fit aspect ratio
       if (imgEl) {
         imgEl.src = fullUrl
         imgEl.alt = altText
         imgEl.style.opacity = '1'
       }
-
       resetTransform()
       updateLockState()
       updateImageLockState()
 
-      // Show widget with pop-in
-      widget!.setVisible(true)
-      containerEl?.classList.remove('pop-out')
-      containerEl?.classList.add('pop-in')
+      if (!mountLayout(!isOpen)) {
+        console.error('[Image Viewer] Could not mount viewer')
+      }
     }
 
     loader.onerror = () => {
+      if (currentImageUrl !== fullUrl) return
       spinnerEl?.classList.remove('active')
       errorEl?.classList.add('active')
-      widget?.setVisible(true)
+      if (imgEl) imgEl.style.opacity = '0'
+      mountLayout(!isOpen)
     }
 
     loader.src = fullUrl
   }
 
-  // Keyboard shortcut handler
-  const keyHandler = (e: KeyboardEvent) => {
-    if (!widget || !widget.isVisible()) return
+  // ---------------------------------------------------------------------------
+  // Global listeners
+  // ---------------------------------------------------------------------------
 
-    // Do not intercept if typing in an input / textarea
-    const active = document.activeElement
-    if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || (active as HTMLElement).isContentEditable)) {
+  const keyHandler = (e: KeyboardEvent) => {
+    if (!isOpen) return
+    // Never swallow browser/app shortcuts like Ctrl+R, Ctrl+L, Ctrl+H, Cmd+-
+    if (e.ctrlKey || e.metaKey || e.altKey) return
+
+    const active = document.activeElement as HTMLElement | null
+    if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.tagName === 'SELECT' || active.isContentEditable)) {
       return
     }
 
     switch (e.key) {
       case 'Escape':
         e.preventDefault()
-        if (anchorMenuEl?.style.display !== 'none' || moreMenuEl?.style.display !== 'none') {
-          closeMenus()
-        } else {
-          closeViewer()
-        }
+        if (menusOpen()) closeMenus()
+        else closeViewer()
         break
       case '+':
       case '=':
         if (!isImageLocked) {
           e.preventDefault()
-          scale = Math.min(10, Math.round(scale * 1.25 * 100) / 100)
-          updateTransform()
+          zoomBy(1.25)
         }
         break
       case '-':
       case '_':
         if (!isImageLocked) {
           e.preventDefault()
-          scale = Math.max(0.2, Math.round((scale / 1.25) * 100) / 100)
-          updateTransform()
+          zoomBy(1 / 1.25)
         }
         break
       case '0':
@@ -1335,35 +1709,17 @@ export function setup(ctx: SpindleFrontendContext) {
           resetTransform()
         }
         break
-      case 'r':
-      case 'R': {
-        e.preventDefault()
-        rotation = (rotation + 90) % 360
-        if (widget && containerEl) {
-          const toolbarH = getToolbarHeight()
-          const currentViewportH = Math.max(80, widget.root.offsetHeight - toolbarH)
-          const effectiveAR = getEffectiveAspectRatio()
-
-          const dims = calculateFitDimensions(
-            Math.round(currentViewportH * effectiveAR),
-            currentViewportH,
-            window.innerWidth * 0.85,
-            window.innerHeight * 0.85,
-            toolbarH,
-            280
-          )
-
-          widget.setSize(dims.widgetWidth, dims.widgetHeight)
-          widget.root.style.width = dims.widgetWidth + 'px'
-          widget.root.style.height = dims.widgetHeight + 'px'
-
-          if (currentAnchor) {
-            applyAnchor(currentAnchor)
-          }
+      case '1':
+        if (!isImageLocked) {
+          e.preventDefault()
+          toggleActualSize()
         }
-        updateTransform()
         break
-      }
+      case 'r':
+      case 'R':
+        e.preventDefault()
+        rotateView()
+        break
       case 'h':
       case 'H':
         e.preventDefault()
@@ -1372,35 +1728,39 @@ export function setup(ctx: SpindleFrontendContext) {
         break
       case 'l':
       case 'L':
+        if (mode === 'float') {
+          e.preventDefault()
+          toggleLock()
+        }
+        break
+      case 'p':
+      case 'P':
         e.preventDefault()
-        toggleLock()
+        toggleImageLock()
+        break
+      case 'd':
+      case 'D':
+        e.preventDefault()
+        toggleDock()
         break
     }
   }
-
   document.addEventListener('keydown', keyHandler)
 
-  // Document click interception for avatars and chat images
+  // Intercept clicks on avatars and chat images
   const clickHandler = (e: MouseEvent) => {
     const target = e.target as HTMLElement | null
     if (!target) return
+    if (containerEl && containerEl.contains(target)) return
 
-    // Ignore clicks inside our own viewer
-    if (widget && widget.root.contains(target)) return
-
-    // Find nearest clicked image
     const img = target.tagName === 'IMG' ? (target as HTMLImageElement) : target.closest('img')
     if (!img) return
-
     const src = img.getAttribute('src')
     if (!src) return
 
-    // Check if this image should be opened
     const isAvatar = src.includes('/avatar') || !!img.closest('.avatar, [data-avatar], .portrait')
     const isAttachment = src.includes('/api/v1/images') || src.includes('/api/v1/image-gen') || !!img.closest('.attachment, [data-attachment]')
     const isMessageImg = !!img.closest('.message-content, .chat-message, [data-message-id]')
-
-    // Content images with reasonable size
     const isContentImage = img.naturalWidth >= 32 && img.naturalHeight >= 32
 
     if (isAvatar || isAttachment || isMessageImg || isContentImage) {
@@ -1409,21 +1769,21 @@ export function setup(ctx: SpindleFrontendContext) {
       showImage(src, img.alt || 'Image Preview')
     }
   }
-
   document.addEventListener('click', clickHandler, true)
 
-  // Window resize handler: keeps anchored windows docked
+  // Browser window resized: keep the floating window on screen / anchored, and re-bound the dock
   const handleWindowResize = () => {
-    if (!widget || !widget.isVisible()) return
-    if (currentAnchor) {
-      applyAnchor(currentAnchor)
-    } else {
-      updateWidgetPosition(logicalX, logicalY)
+    if (!isOpen) return
+    const edge = edgeOf(mode)
+    if (!edge) {
+      reflowFloat()
+    } else if (dockPanel) {
+      dockPanel.setMaxSize(clampDockSize(Infinity, edge, window.innerWidth, window.innerHeight))
     }
   }
   window.addEventListener('resize', handleWindowResize)
 
-  // Register chat input bar action in the Extras popover
+  // Composer extras action
   try {
     inputAction = ctx.ui.registerInputBarAction({
       id: 'view-character-avatar',
@@ -1442,32 +1802,35 @@ export function setup(ctx: SpindleFrontendContext) {
         showImage(`/api/v1/characters/${activeChat.characterId}/avatar`, 'Character Avatar')
       } else {
         const chatAvatar = document.querySelector('img[src*="/avatar"]') as HTMLImageElement | null
-        if (chatAvatar?.src) {
-          showImage(chatAvatar.src, 'Avatar')
-        }
+        if (chatAvatar?.src) showImage(chatAvatar.src, 'Avatar')
       }
     })
   } catch (err) {
     console.debug('[Image Viewer] Input bar action registration skipped:', err)
   }
 
-  // Listen for permission changes (grant / revoke)
+  // Permission revoked: tear down both host surfaces
   const unsubPerm = ctx.events.on('PERMISSION_CHANGED', async (payload) => {
     const detail = payload as { permission?: string; granted?: boolean } | undefined
-    if (detail?.permission === 'ui_panels') {
-      if (!detail.granted && widget) {
-        widget.destroy()
-        widget = null
-      }
+    if (detail?.permission === 'ui_panels' && !detail.granted) {
+      unmountDock()
+      widget?.destroy()
+      widget = null
+      isOpen = false
     }
   })
 
-  // Global helper for testing & programmatic access
   const helper = {
     show: showImage,
     close: closeViewer,
     reset: resetTransform,
-    setAnchor: applyAnchor,
+    setAnchor: (anchor: AnchorPosition) => {
+      if (mode !== 'float') setMode('float')
+      applyAnchor(anchor)
+      persist()
+    },
+    setMode,
+    toggleDock,
     toggleLock,
     toggleImageLock,
     resolveUrl: resolveFullImageUrl,
@@ -1478,15 +1841,17 @@ export function setup(ctx: SpindleFrontendContext) {
     showImage(url || 'https://picsum.photos/800/600')
   }
 
-  console.log('[Image Viewer] Extension loaded with anchor presets, flush placement, and toolbar resize')
+  console.log('[Image Viewer] Extension loaded')
 
-  // Cleanup function
   return () => {
     document.removeEventListener('keydown', keyHandler)
     document.removeEventListener('click', clickHandler, true)
+    document.removeEventListener('pointerdown', outsidePointerHandler)
     window.removeEventListener('resize', handleWindowResize)
+    if (closeTimer) clearTimeout(closeTimer)
     unsubPerm?.()
     inputAction?.destroy()
+    unmountDock()
     widget?.destroy()
     removeStyles()
 
