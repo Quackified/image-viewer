@@ -1202,11 +1202,9 @@ export function setup(ctx: SpindleFrontendContext) {
       }
       if (!dockPanel) {
         try {
-          // Distinct title per edge so the host can't reuse a remembered placement from another edge
-          console.debug('[Image Viewer] Requesting dock panel on edge:', edge)
           dockPanel = ctx.ui.requestDockPanel({
             edge,
-            title: `Image Viewer (${edge})`,
+            title: 'Image Viewer',
             size: dockSizeFor(edge),
             minSize: DOCK_MIN_SIZE,
             maxSize: clampDockSize(Infinity, edge, window.innerWidth, window.innerHeight),
