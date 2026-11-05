@@ -188,6 +188,8 @@ describe('Image Viewer Extension', () => {
       expect(detectAnchor(0, 0, 400, 300, 1920, 1080)).toBe('top-left')
       expect(detectAnchor(1520, 780, 400, 300, 1920, 1080)).toBe('bottom-right')
       expect(detectAnchor(760, 390, 400, 300, 1920, 1080)).toBe('center')
+      expect(detectAnchor(0, 390, 400, 300, 1920, 1080)).toBe('center-left')
+      expect(detectAnchor(1520, 390, 400, 300, 1920, 1080)).toBe('center-right')
       expect(detectAnchor(300, 300, 400, 300, 1920, 1080)).toBeNull()
     })
   })
@@ -237,6 +239,13 @@ describe('Image Viewer Extension', () => {
 
     it('accounts for rotated images', () => {
       expect(calculateActualSizeScale(2000, 1000, 500, 1000, true)).toBeCloseTo(2, 5)
+    })
+  })
+
+  describe('calculateAnchorPosition (center edges)', () => {
+    it('vertically centers against the left and right edges', () => {
+      expect(calculateAnchorPosition('center-left', 400, 300, 1920, 1080)).toEqual({ x: 0, y: 390 })
+      expect(calculateAnchorPosition('center-right', 400, 300, 1920, 1080)).toEqual({ x: 1520, y: 390 })
     })
   })
 })

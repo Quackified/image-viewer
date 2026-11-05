@@ -5,7 +5,14 @@ import type {
   SpindleDockPanelHandle,
 } from 'lumiverse-spindle-types'
 
-export type AnchorPosition = 'top-left' | 'top-right' | 'center' | 'bottom-left' | 'bottom-right'
+export type AnchorPosition =
+  | 'top-left'
+  | 'top-right'
+  | 'center-left'
+  | 'center-right'
+  | 'center'
+  | 'bottom-left'
+  | 'bottom-right'
 
 /**
  * Resolves full resolution URLs from Lumiverse thumbnail URLs
@@ -131,6 +138,14 @@ export function calculateAnchorPosition(
       x = Math.max(0, windowWidth - widgetWidth - margin)
       y = margin
       break
+    case 'center-left':
+      x = margin
+      y = Math.max(0, Math.round((windowHeight - widgetHeight) / 2))
+      break
+    case 'center-right':
+      x = Math.max(0, windowWidth - widgetWidth - margin)
+      y = Math.max(0, Math.round((windowHeight - widgetHeight) / 2))
+      break
     case 'center':
       x = Math.max(0, Math.round((windowWidth - widgetWidth) / 2))
       y = Math.max(0, Math.round((windowHeight - widgetHeight) / 2))
@@ -244,6 +259,8 @@ export function detectAnchor(
   if (right && top) return 'top-right'
   if (left && bottom) return 'bottom-left'
   if (right && bottom) return 'bottom-right'
+  if (left && midY) return 'center-left'
+  if (right && midY) return 'center-right'
   if (midX && midY) return 'center'
   return null
 }
@@ -678,7 +695,7 @@ function loadPrefs(): ViewerPrefs {
       lastDock: isMode(parsed.lastDock) && parsed.lastDock !== 'float' ? parsed.lastDock : fallback.lastDock,
       dockSizes: parsed.dockSizes && typeof parsed.dockSizes === 'object' ? parsed.dockSizes : {},
       positionLocked: parsed.positionLocked === true,
-      anchor: (['top-left', 'top-right', 'center', 'bottom-left', 'bottom-right'] as const).includes(parsed.anchor as AnchorPosition)
+      anchor: (['top-left', 'top-right', 'center-left', 'center-right', 'center', 'bottom-left', 'bottom-right'] as const).includes(parsed.anchor as AnchorPosition)
         ? (parsed.anchor as AnchorPosition)
         : null,
     }
@@ -1318,9 +1335,11 @@ export function setup(ctx: SpindleFrontendContext) {
             <div class="iv-menu-grid iv-anchor-grid">
               <button class="iv-menu-btn" data-action="anchor" data-anchor="top-left">↖ Top Left</button>
               <button class="iv-menu-btn" data-action="anchor" data-anchor="top-right">↗ Top Right</button>
-              <button class="iv-menu-btn" data-action="anchor" data-anchor="center">✛ Center</button>
+              <button class="iv-menu-btn" data-action="anchor" data-anchor="center-left">← Center Left</button>
+              <button class="iv-menu-btn" data-action="anchor" data-anchor="center-right">→ Center Right</button>
               <button class="iv-menu-btn" data-action="anchor" data-anchor="bottom-left">↙ Bottom Left</button>
               <button class="iv-menu-btn" data-action="anchor" data-anchor="bottom-right">↘ Bottom Right</button>
+              <button class="iv-menu-btn" data-action="anchor" data-anchor="center">✛ Center</button>
             </div>
             <div class="iv-menu-divider"></div>
             <button class="iv-menu-item" data-action="toggle-lock" title="Locked: toolbar drag resizes instead of moving (L)">

@@ -42,7 +42,7 @@ image-viewer/
 | **Resize via toolbar** | Drag the toolbar while position is locked | — |
 | **Pan / Zoom** | Unlock with `🔒`/`✋`, then drag, wheel, or `+` / `−` (locked by default) | `P`, `+`, `−` |
 | **Fit / 100%** | Click the zoom pill (Fit ↔ 1:1 pixels), or double-click viewport | `0`, `1` |
-| **Layout menu** | `⊞` → Float, Dock Left/Right/Top/Bottom, anchor presets, lock position, reset window | `D` toggles dock |
+| **Layout menu** | `⊞` → Float, Dock Left/Right/Top/Bottom, anchor presets (corners, center, center left/right), lock position, reset window | `D` toggles dock |
 | **Lock position** | Layout menu (toolbar drag then resizes instead of moving) | `L` |
 | **Rotate / Flip** | `↻` / `⇄` (window reshapes to match, image always fills it) | `R` / `H` |
 | **More** | `⋮` → Copy Image Link, Open in New Tab, Download | — |
@@ -81,6 +81,7 @@ image-viewer/
 ## 📋 Changelog
 
 ### v1.2.0
+- **More anchors**: Center Left and Center Right presets
 - **Docked mode (layout-aware)**: Dock Left/Right/Top/Bottom via the host's dock panel API, so the chat reflows and is never overlaid. Splitter-resizable, size remembered per edge. `D` toggles dock/float
 - **Pan/zoom locked by default**; while locked, dragging the image moves the window, zoom controls dim, and the lock is a visible toolbar button (`P`)
 - **Resize rewrite**: four corner handles with the opposite corner pinned; fixes jitter/no-growth on right/bottom-anchored windows and growth past the screen edge
