@@ -164,6 +164,21 @@ export function calculateAnchorPosition(
 }
 
 /**
+ * Height of the host chrome over the top of the page: the desktop shell's titlebar or a
+ * window-controls-overlay PWA's control strip. 0 in a plain browser tab or on older hosts.
+ */
+export function measureTopInset(doc: Document = document): number {
+  if (!doc.body) return 0
+  const probe = doc.createElement('div')
+  probe.style.cssText =
+    'position:fixed;top:0;left:0;width:0;visibility:hidden;pointer-events:none;height:var(--app-window-controls-overlay-top, 0px)'
+  doc.body.appendChild(probe)
+  const h = probe.offsetHeight
+  probe.remove()
+  return Number.isFinite(h) && h > 0 ? h : 0
+}
+
+/**
  * Calculates host coordinate and root transform offset to compensate for
  * host container padding (e.g. Lumiverse's 12px clamp) so the window can sit flush against viewport edges.
  */
@@ -746,8 +761,11 @@ export function setup(ctx: SpindleFrontendContext) {
   let isLocked = prefs.positionLocked
   let isImageLocked = true
   let currentAnchor: AnchorPosition | null = prefs.anchor
+  // Window coordinates are relative to the workspace below the host titlebar (topInset px down)
   let logicalX = 0
   let logicalY = 0
+  let topInset = measureTopInset()
+  const viewH = () => Math.max(0, window.innerHeight - topInset)
   let floatW = 440
   let floatH = 340
 
@@ -928,10 +946,10 @@ export function setup(ctx: SpindleFrontendContext) {
   // Places the window at (x, y) in screen space, using a transform to cover the host's 12px clamp padding
   function placeFloat(x: number, y: number) {
     if (!widget) return
-    const placement = calculateEdgeFlushPlacement(x, y, floatW, floatH, window.innerWidth, window.innerHeight, 12)
+    const placement = calculateEdgeFlushPlacement(x, y, floatW, floatH, window.innerWidth, viewH(), 12)
     logicalX = placement.hostX + placement.offsetX
     logicalY = placement.hostY + placement.offsetY
-    widget.moveTo(placement.hostX, placement.hostY)
+    widget.moveTo(placement.hostX, placement.hostY + topInset)
     widget.root.style.transform =
       placement.offsetX !== 0 || placement.offsetY !== 0
         ? `translate3d(${placement.offsetX}px, ${placement.offsetY}px, 0)`
@@ -941,7 +959,7 @@ export function setup(ctx: SpindleFrontendContext) {
   function applyAnchor(anchor: AnchorPosition) {
     if (!widget) return
     currentAnchor = anchor
-    const { x, y } = calculateAnchorPosition(anchor, floatW, floatH, window.innerWidth, window.innerHeight, 0)
+    const { x, y } = calculateAnchorPosition(anchor, floatW, floatH, window.innerWidth, viewH(), 0)
     placeFloat(x, y)
   }
 
@@ -959,7 +977,7 @@ export function setup(ctx: SpindleFrontendContext) {
       eff.w,
       eff.h,
       window.innerWidth * 0.85,
-      window.innerHeight * 0.85,
+      viewH() * 0.85,
       getToolbarHeight(),
       minViewportW()
     )
@@ -971,7 +989,7 @@ export function setup(ctx: SpindleFrontendContext) {
     } else {
       placeFloat(
         Math.max(0, Math.round((window.innerWidth - floatW) / 2)),
-        Math.max(0, Math.round((window.innerHeight - floatH) / 2))
+        Math.max(0, Math.round((viewH() - floatH) / 2))
       )
     }
   }
@@ -987,7 +1005,7 @@ export function setup(ctx: SpindleFrontendContext) {
         oldVH,
         oldVW,
         window.innerWidth * 0.9,
-        window.innerHeight * 0.9,
+        viewH() * 0.9,
         tb,
         minViewportW()
       )
@@ -1002,13 +1020,13 @@ export function setup(ctx: SpindleFrontendContext) {
     if (!widget) return
     const tb = getToolbarHeight()
     const ar = getEffectiveAspectRatio()
-    if (floatW > window.innerWidth || floatH > window.innerHeight) {
+    if (floatW > window.innerWidth || floatH > viewH()) {
       const dims = calculateResizeDimensions(
         floatW,
         0,
         ar,
         window.innerWidth,
-        Math.max(80, window.innerHeight - tb),
+        Math.max(80, viewH() - tb),
         tb,
         minViewportW()
       )
@@ -1031,6 +1049,7 @@ export function setup(ctx: SpindleFrontendContext) {
 
   function beginInteraction(e: PointerEvent, el: HTMLElement, kind: Interaction['kind'], corner: ResizeCorner = 'se') {
     if (mode !== 'float' || !widget || e.button !== 0) return
+    topInset = measureTopInset()
     e.preventDefault()
     e.stopPropagation()
     interaction = {
@@ -1061,7 +1080,7 @@ export function setup(ctx: SpindleFrontendContext) {
     const dx = e.clientX - it.startX
     const dy = e.clientY - it.startY
     const vw = window.innerWidth
-    const vh = window.innerHeight
+    const vh = viewH()
     const tb = getToolbarHeight()
 
     if (it.kind === 'move') {
@@ -1112,7 +1131,7 @@ export function setup(ctx: SpindleFrontendContext) {
       // ignore
     }
     // Anchor is derived from where the window actually ended up
-    currentAnchor = detectAnchor(logicalX, logicalY, floatW, floatH, window.innerWidth, window.innerHeight)
+    currentAnchor = detectAnchor(logicalX, logicalY, floatW, floatH, window.innerWidth, viewH())
     persist()
   }
 
@@ -1135,7 +1154,7 @@ export function setup(ctx: SpindleFrontendContext) {
         height: floatH,
         initialPosition: {
           x: Math.max(0, Math.round((window.innerWidth - floatW) / 2)),
-          y: Math.max(0, Math.round((window.innerHeight - floatH) / 2)),
+          y: topInset + Math.max(0, Math.round((viewH() - floatH) / 2)),
         },
         snapToEdge: false,
         tooltip: 'Image Viewer',
@@ -1149,18 +1168,18 @@ export function setup(ctx: SpindleFrontendContext) {
     // Safety net: if the host ever drags the widget itself, adopt its position as ours
     widget.onDragEnd((pos) => {
       currentAnchor = null
-      placeFloat(pos.x, pos.y)
-      currentAnchor = detectAnchor(logicalX, logicalY, floatW, floatH, window.innerWidth, window.innerHeight)
+      placeFloat(pos.x, pos.y - topInset)
+      currentAnchor = detectAnchor(logicalX, logicalY, floatW, floatH, window.innerWidth, viewH())
     })
     return true
   }
 
   function dockSizeFor(edge: DockEdge): number {
     return clampDockSize(
-      prefs.dockSizes[edge] ?? defaultDockSize(edge, window.innerWidth, window.innerHeight),
+      prefs.dockSizes[edge] ?? defaultDockSize(edge, window.innerWidth, viewH()),
       edge,
       window.innerWidth,
-      window.innerHeight
+      viewH()
     )
   }
 
@@ -1195,6 +1214,7 @@ export function setup(ctx: SpindleFrontendContext) {
       closeTimer = null
     }
     const edge = edgeOf(mode)
+    topInset = measureTopInset()
 
     if (!edge) {
       unmountDock()
@@ -1224,7 +1244,7 @@ export function setup(ctx: SpindleFrontendContext) {
             title: 'Image Viewer',
             size: dockSizeFor(edge),
             minSize: DOCK_MIN_SIZE,
-            maxSize: clampDockSize(Infinity, edge, window.innerWidth, window.innerHeight),
+            maxSize: clampDockSize(Infinity, edge, window.innerWidth, viewH()),
             resizable: false,
             chromeless: true,
           })
@@ -1593,7 +1613,7 @@ export function setup(ctx: SpindleFrontendContext) {
       const dx = e.clientX - dockDrag.startX
       const dy = e.clientY - dockDrag.startY
       const grow = edge === 'left' ? dx : edge === 'right' ? -dx : edge === 'top' ? dy : -dy
-      const size = clampDockSize(dockDrag.startSize + grow, edge, window.innerWidth, window.innerHeight)
+      const size = clampDockSize(dockDrag.startSize + grow, edge, window.innerWidth, viewH())
       prefs.dockSizes[edge] = size
       dockPanel.setSize(size)
     })
@@ -1792,12 +1812,13 @@ export function setup(ctx: SpindleFrontendContext) {
 
   // Browser window resized: keep the floating window on screen / anchored, and re-bound the dock
   const handleWindowResize = () => {
+    topInset = measureTopInset()
     if (!isOpen) return
     const edge = edgeOf(mode)
     if (!edge) {
       reflowFloat()
     } else if (dockPanel) {
-      dockPanel.setMaxSize(clampDockSize(Infinity, edge, window.innerWidth, window.innerHeight))
+      dockPanel.setMaxSize(clampDockSize(Infinity, edge, window.innerWidth, viewH()))
     }
   }
   window.addEventListener('resize', handleWindowResize)

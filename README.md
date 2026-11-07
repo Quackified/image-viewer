@@ -2,7 +2,7 @@
 
 A modern floating image viewer extension for Lumiverse with pan, zoom, rotation, anchor presets, position locking, and avatar/attachment detection.
 
-![Version](https://img.shields.io/badge/version-1.2.0-blue)
+![Version](https://img.shields.io/badge/version-1.2.1-blue)
 ![Platform](https://img.shields.io/badge/platform-Lumiverse-purple)
 
 ## 📦 Installation
@@ -79,6 +79,9 @@ image-viewer/
 - `"ui_panels"`: Required by Lumiverse to create floating widgets that overlay the screen. If not yet granted, the extension prompts the user gracefully when opening an image.
 
 ## 📋 Changelog
+
+### v1.2.1
+- **Desktop titlebar**: the floating window, its anchors and edge snapping stay below the Lumiverse Desktop titlebar (and a PWA window-controls overlay) instead of sliding underneath it
 
 ### v1.2.0
 - **More anchors**: Center Left and Center Right presets
