@@ -2,7 +2,7 @@
 
 A modern floating image viewer extension for Lumiverse with pan, zoom, rotation, anchor presets, position locking, and avatar/attachment detection.
 
-![Version](https://img.shields.io/badge/version-1.2.1-blue)
+![Version](https://img.shields.io/badge/version-1.4.0-blue)
 ![Platform](https://img.shields.io/badge/platform-Lumiverse-purple)
 
 ## 📦 Installation
@@ -34,7 +34,8 @@ image-viewer/
 
 | Action | How | Shortcut |
 |---|---|---|
-| **Open Image** | Click any avatar, attachment, or chat image | — |
+| **Open Image** | Click any avatar, attachment, or chat image; each opens in its own window (clicking an already-open image brings its window forward) | — |
+| **Multiple windows** | Up to 8 windows, cascaded; the last one you touched gets keyboard shortcuts. `⋮` → *Open Images in New Windows* toggles replace-in-place mode; *Close All Windows* appears when several are open | — |
 | **Quick Avatar** | Extras menu (`+`) in input bar → *View Character Avatar* | — |
 | **Move window** | Drag the toolbar, or drag anywhere on the image while pan/zoom is locked (default) | — |
 | **Snap** | Dragging magnetically snaps to screen edges/center; hold `Shift` to disable | — |
@@ -45,7 +46,11 @@ image-viewer/
 | **Layout menu** | `⊞` → Float, Dock Left/Right/Top/Bottom, anchor presets (corners, center, center left/right), lock position, reset window | `D` toggles dock |
 | **Lock position** | Layout menu (toolbar drag then resizes instead of moving) | `L` |
 | **Rotate / Flip** | `↻` / `⇄` (window reshapes to match, image always fills it) | `R` / `H` |
-| **More** | `⋮` → Copy Image Link, Open in New Tab, Download | — |
+| **More** | `⋮` → Copy Image (PNG to clipboard), Copy Image Link, Open in New Tab, Download | — |
+| **Pin to message** | `⋮` → *Pin to Message* ties the window to the message the image came from (or the latest message). A 📌 chip appears on the message; the window shows while that message is on screen and hides when you scroll away or switch chats. × hides it until you click the chip. Unpin from `⋮` or Settings | — |
+| **Remember windows** | Open windows (image, size, position, rotation, dock) reopen after a reload | — |
+| **Settings** | *Settings → Extensions → Image Viewer*: new-window mode, max windows, opening size, restore, pin behaviour, pan lock default, and a list of all pinned images | — |
+| **Touch** | Pinch to zoom (pan/zoom unlocked); narrow windows move zoom/rotate/flip into `⋮` | — |
 | **Close** | `×` or Escape (closes menus first) | `Esc` |
 
 ## 🔧 Technical Details
@@ -79,6 +84,17 @@ image-viewer/
 - `"ui_panels"`: Required by Lumiverse to create floating widgets that overlay the screen. If not yet granted, the extension prompts the user gracefully when opening an image.
 
 ## 📋 Changelog
+
+### v1.4.0
+- **Pin to message**: attach a window to a chat message. A 📌 chip on the message toggles it; by default the window shows only while its message is on screen and only in its chat. Pins (with their window layout) are saved, synced through Lumiverse's per-user extension settings when available, and removed when their message is deleted
+- **Remember windows**: windows open when the page closed reopen with their size, position, rotation and dock (per device)
+- **Settings section** in the Extensions settings tab: new-window mode, max windows (1-12), opening size, restore on/off, pins follow message, pan/zoom lock default, pinned image list with Show/Unpin, bulk unpin, forget remembered windows
+
+### v1.3.0
+- **Multiple windows**: every image opens in its own cascaded window (max 8, oldest recycled); re-clicking an open image focuses it. Toggle back to single-window replace mode in `⋮`. Only one window per dock edge; docking onto an occupied edge floats the other window
+- **Copy Image**: copies the image itself to the clipboard as PNG (converted when needed), alongside Copy Image Link
+- **Mobile**: floating and dock minimum sizes scale with the screen (dock min ~22% of the axis, floor 100px; float min 40% of width, floor 140px), larger touch targets, pinch-to-zoom, compact toolbar on narrow windows
+- **Readable menus**: dropdowns use the solid elevated theme background instead of the translucent fill, so they stay legible over light images
 
 ### v1.2.1
 - **Desktop titlebar**: the floating window, its anchors and edge snapping stay below the Lumiverse Desktop titlebar (and a PWA window-controls overlay) instead of sliding underneath it

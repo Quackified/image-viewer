@@ -11,6 +11,11 @@ import {
   clampDockSize,
   defaultDockSize,
   calculateActualSizeScale,
+  responsiveMinViewportWidth,
+  dockMinSize,
+  fitScreenFraction,
+  MIN_VIEWPORT_WIDTH,
+  DOCK_MIN_SIZE,
 } from '../src/frontend'
 import manifest from '../spindle.json'
 import { existsSync, statSync } from 'node:fs'
@@ -246,6 +251,37 @@ describe('Image Viewer Extension', () => {
     it('vertically centers against the left and right edges', () => {
       expect(calculateAnchorPosition('center-left', 400, 300, 1920, 1080)).toEqual({ x: 0, y: 390 })
       expect(calculateAnchorPosition('center-right', 400, 300, 1920, 1080)).toEqual({ x: 1520, y: 390 })
+    })
+  })
+  describe('Mobile sizing', () => {
+    it('keeps the desktop floating minimum on wide screens', () => {
+      expect(responsiveMinViewportWidth(1440)).toBe(MIN_VIEWPORT_WIDTH)
+    })
+
+    it('scales the floating minimum down on phones', () => {
+      expect(responsiveMinViewportWidth(390)).toBe(156)
+      expect(responsiveMinViewportWidth(320)).toBe(140)
+      expect(responsiveMinViewportWidth(100)).toBe(100)
+    })
+
+    it('keeps the desktop dock minimum on large screens', () => {
+      expect(dockMinSize('right', 1920, 1080)).toBe(DOCK_MIN_SIZE)
+    })
+
+    it('lowers the dock minimum on phones', () => {
+      expect(dockMinSize('left', 390, 844)).toBe(100)
+      expect(dockMinSize('bottom', 390, 844)).toBe(185)
+      expect(clampDockSize(50, 'right', 390, 844)).toBe(100)
+    })
+
+    it('defaults a phone side dock well under the old 240px minimum', () => {
+      const size = defaultDockSize('right', 390, 844)
+      expect(size).toBeLessThan(DOCK_MIN_SIZE)
+      expect(size).toBeGreaterThanOrEqual(100)
+    })
+
+    it('lets a new window use more of a phone screen', () => {
+      expect(fitScreenFraction(390)).toBeGreaterThan(fitScreenFraction(1440))
     })
   })
 })
